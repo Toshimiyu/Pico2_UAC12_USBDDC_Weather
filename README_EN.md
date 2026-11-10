@@ -121,6 +121,8 @@ To reduce load during music playback, dynamic Weather-screen updates are limited
 
 The screen shows date and time, today's and tomorrow's conditions, high and low temperatures and precipitation probability, USB reception status, and Pico internal temperature. Weather conditions are color-coded. Date, time, and forecasts come from the PC service; internal temperature is sampled by the Pico. Unavailable temperatures are displayed as `--`.
 
+To the right of `WEATHER`, the selected temperature location's English name is displayed in half-width characters. It may differ from the weather and precipitation forecast area. Long names are truncated. The location name is visible on the screen, so take care when sharing photographs.
+
 The USB status is `WAIT` before valid data is received, `OK` after reception, and `LOST` after five minutes without valid data. This indicates weather-data reception, not the USB audio state itself.
 
 ### Diagnostic Mode Controls
@@ -188,6 +190,8 @@ To change the area, stop the service, run `--setup` again, and restart the servi
 The service auto-detects the Pico CDC port by USB VID/PID; use `--port COM5` to select it explicitly. It sends `TIME` every minute and `TODAY`/`TOMORROW` data for the selected area from the JMA JSON feed every 30 minutes. If temperatures are unavailable, the forecast is still sent when conditions and precipitation probability are available, and temperatures are displayed as `--`. If conditions or precipitation probability are unavailable for a date, that day's update is skipped and the previous data is retained.
 
 Date and time use Japan Standard Time. The displayed high and low temperatures and precipitation probability are respectively the maximum and minimum temperatures and maximum precipitation probability among the forecast values available for that date. The available forecast values vary with the time of day.
+
+The location name is obtained from the JMA observation station list and sent every minute along with the time. If retrieval fails, it is retried every 60 seconds while forecast updates continue. Existing area configurations remain usable. Displaying the name requires updating both the firmware and PC service.
 
 At startup it sends `TIME` and fetches and sends the forecast; if the JMA request fails it retries after 60 seconds. If the Pico is disconnected or the COM port is not found, it detects the loss within 1 second and retries every 2 seconds and resends the last forecast after reconnecting. While the Pico is in DIAG MODE (hold the B button for 3 seconds), it discards incoming data; after returning to GADGET MODE (the standard mode), data is applied from the next transmission.
 

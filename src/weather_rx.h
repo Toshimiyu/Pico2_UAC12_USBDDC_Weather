@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define WEATHER_AREA_LABEL_MAX_LENGTH 22u
+
 typedef enum
 {
 	WEATHER_CONDITION_NONE = 0,
@@ -47,6 +49,7 @@ typedef struct
 	uint8_t hour;
 	uint8_t minute;
 	bool has_time;
+	char area_label[WEATHER_AREA_LABEL_MAX_LENGTH + 1u];
 	weather_day_t today;
 	weather_day_t tomorrow;
 	int16_t pico_temperature_tenths_c;

@@ -26,6 +26,7 @@ except ImportError:
 
 
 JMA_AREA_URL = "https://www.jma.go.jp/bosai/common/const/area.json"
+JMA_STATION_URL = "https://www.jma.go.jp/bosai/amedas/const/amedastable.json"
 JMA_FORECAST_URL = "https://www.jma.go.jp/bosai/forecast/data/forecast/{}.json"
 JST = timezone(timedelta(hours=9))
 PICO_VID = 0x2E8A
@@ -37,6 +38,7 @@ TIME_INTERVAL_S = 60
 FORECAST_INTERVAL_S = 1800
 FORECAST_RETRY_S = 60
 RECONNECT_INTERVAL_S = 2
+AREA_LABEL_MAX_LENGTH = 22
 
 logger = logging.getLogger("weather_service")
 
@@ -76,6 +78,16 @@ def fetch_json(url: str) -> Any:
     request = Request(url, headers={"User-Agent": "Pico2-Weather-Service/1.0"})
     with urlopen(request, timeout=15) as response:
         return json.load(response)
+
+
+def area_label(station_code: str) -> str:
+    stations = fetch_json(JMA_STATION_URL)
+    name = stations[station_code]["enName"]
+    if not isinstance(name, str) or not name or any(ord(char) < 32 or ord(char) > 126 or char == "," for char in name):
+        raise ValueError("JMA area name is not a printable ASCII label.")
+    if len(name) > AREA_LABEL_MAX_LENGTH:
+        name = name[:AREA_LABEL_MAX_LENGTH - 3].rstrip() + "..."
+    return name
 
 
 def forecast_offices() -> dict[str, str]:
@@ -329,6 +341,7 @@ class WeatherService:
         *,
         open_port: Callable[[str], Any] | None = None,
         fetch: Callable[[str], list[dict[str, Any]]] = fetch_forecast,
+        fetch_area_label: Callable[[str], str] = area_label,
         resolve: Callable[[str | None], str] = resolve_port,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -338,12 +351,15 @@ class WeatherService:
         self.area = area
         self.open_port = open_port or self._open_serial
         self.fetch = fetch
+        self.fetch_area_label = fetch_area_label
         self.resolve = resolve
         self.monotonic = monotonic
         self.sleep = sleep
         self.clock = clock
         self.cached_lines: dict[str, str] = {}
         self.next_fetch = 0.0
+        self.area_label: str | None = None
+        self.next_area_fetch = 0.0
 
     @staticmethod
     def _open_serial(port_name: str) -> Any:
@@ -374,9 +390,20 @@ class WeatherService:
             while True:
                 now = self.clock()
                 monotonic_now = self.monotonic()
-                if monotonic_now >= next_time:
+                time_due = monotonic_now >= next_time
+                if time_due:
                     send(connection, time_line(now))
                     next_time = monotonic_now + TIME_INTERVAL_S
+                new_area_label = False
+                if self.area_label is None and monotonic_now >= self.next_area_fetch:
+                    try:
+                        self.area_label = self.fetch_area_label(self.area.temperature)
+                        new_area_label = True
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        logger.warning("Could not retrieve forecast area label: %s", error)
+                        self.next_area_fetch = self.monotonic() + FORECAST_RETRY_S
+                if self.area_label is not None and (time_due or new_area_label):
+                    send(connection, f"AREA,{self.area_label}\r\n")
                 updated = monotonic_now >= self.next_fetch and self.refresh_forecast(now)
                 # A new connection always receives the last known forecast without waiting for JMA.
                 if updated or not announced:

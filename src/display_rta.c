@@ -1343,6 +1343,7 @@ static void render_mode_countdown(void)
 }
 
 enum {
+	WEATHER_ELEMENT_AREA,
 	WEATHER_ELEMENT_DATETIME,
 	WEATHER_ELEMENT_TODAY_PHRASE,
 	WEATHER_ELEMENT_TOMORROW_PHRASE,
@@ -1362,6 +1363,8 @@ static bool weather_element_dirty(unsigned element)
 	if (!(weather_drawn_mask & (1u << element)))
 		return true;
 	switch (element) {
+	case WEATHER_ELEMENT_AREA:
+		return strcmp(n->area_label, o->area_label) != 0;
 	case WEATHER_ELEMENT_DATETIME:
 		return n->has_time != o->has_time || n->year != o->year ||
 			n->month != o->month || n->day != o->day ||
@@ -1400,6 +1403,10 @@ static void render_weather_page(void)
 		if (!dirty)
 			continue;
 		switch (element) {
+		case WEATHER_ELEMENT_AREA:
+			lcd_fill_rect(132, 6, 176, 16, COLOR_BG);
+			lcd_draw_string_centered(220, 10, weather_data.area_label, COLOR_CH_LABEL, COLOR_BG, 1);
+			break;
 		case WEATHER_ELEMENT_DATETIME: draw_weather_datetime(); break;
 		case WEATHER_ELEMENT_TODAY_PHRASE:
 			draw_weather_day_phrase(WEATHER_LEFT_CENTER_X, &weather_data.today); break;

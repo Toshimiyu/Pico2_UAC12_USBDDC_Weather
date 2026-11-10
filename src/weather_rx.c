@@ -223,6 +223,16 @@ static bool parse_weather_line(char *line)
 			strcmp(fields[0], "TOMORROW") == 0 &&
 			parse_day(fields, &updated.tomorrow);
 	}
+	else if (strncmp(line, "AREA,", 5) == 0)
+	{
+		const char *label = line + 5;
+		const size_t length = strlen(label);
+		valid = length > 0 && length <= WEATHER_AREA_LABEL_MAX_LENGTH;
+		for (size_t i = 0; valid && i < length; ++i)
+			valid = (unsigned char)label[i] >= 32 && (unsigned char)label[i] <= 126 && label[i] != ',';
+		if (valid)
+			memcpy(updated.area_label, label, length + 1);
+	}
 
 	if (!valid)
 		return false;

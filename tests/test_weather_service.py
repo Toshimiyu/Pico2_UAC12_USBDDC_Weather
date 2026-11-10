@@ -98,6 +98,21 @@ class ForecastParsingTests(unittest.TestCase):
 
 
 class AreaSetupTests(unittest.TestCase):
+    def test_area_label_format_and_limit(self):
+        names = {
+            "12345": {"enName": "Example Station"},
+            "54321": {"enName": "A Very Long Station Name Here"},
+            "99999": {"enName": "invalid,name"},
+        }
+        with mock.patch.object(weather_service, "fetch_json", return_value=names) as fetch:
+            self.assertEqual(weather_service.area_label("12345"), "Example Station")
+            fetch.assert_called_with(weather_service.JMA_STATION_URL)
+            label = weather_service.area_label("54321")
+            self.assertEqual(label, "A Very Long Station...")
+            self.assertLessEqual(len(label), weather_service.AREA_LABEL_MAX_LENGTH)
+            with self.assertRaises(ValueError):
+                weather_service.area_label("99999")
+
     def test_setup_saves_selection_and_loads_it(self):
         offices = {"offices": {"123456": {"name": "Office"}}}
         products = [{"timeSeries": [
@@ -237,6 +252,7 @@ class Harness:
             weather_service.ForecastArea("123456", "123450", "12345"),
             open_port=self.open_port,
             fetch=self.fetch,
+            fetch_area_label=lambda code: "Example Station" if code == "12345" else "Wrong Area",
             resolve=lambda _: "COM9",
             monotonic=self.clock.monotonic,
             sleep=self.clock.sleep,
@@ -277,7 +293,7 @@ class ServiceBehaviourTests(unittest.TestCase):
     def test_01_startup_sends_time_today_tomorrow_in_order(self):
         h = Harness(until=1)
         h.run()
-        self.assertEqual(h.connections[0].commands(), ["TIME", "TODAY", "TOMORROW"])
+        self.assertEqual(h.connections[0].commands(), ["TIME", "AREA", "TODAY", "TOMORROW"])
         self.assertEqual(h.connections[0].lines[0], "TIME,2026,11,10,18,0\r\n")
         self.assertEqual(h.connections[0].flush_calls, 0)
 
@@ -286,6 +302,7 @@ class ServiceBehaviourTests(unittest.TestCase):
             h = Harness(until=until)
             h.run()
             self.assertEqual(h.connections[0].commands().count("TIME"), expected, until)
+            self.assertEqual(h.connections[0].commands().count("AREA"), expected, until)
 
     def test_03_forecast_refreshes_every_30_minutes(self):
         h = Harness(until=1801)
@@ -310,7 +327,7 @@ class ServiceBehaviourTests(unittest.TestCase):
         h = Harness(until=70)
         h.fetch_error = URLError("offline")
         h.run()
-        self.assertEqual(h.connections[0].commands(), ["TIME", "TIME"])
+        self.assertEqual(h.connections[0].commands(), ["TIME", "AREA", "TIME", "AREA"])
         self.assertEqual(h.fetch_calls, 2)
 
     def test_05_write_failure_closes_port_and_enters_reconnect_mode(self):
@@ -328,7 +345,7 @@ class ServiceBehaviourTests(unittest.TestCase):
         h.clock.at(70, h.plug)
         h.run()
         self.assertEqual(len(h.connections), 2)
-        self.assertEqual(h.connections[1].commands()[:3], ["TIME", "TODAY", "TOMORROW"])
+        self.assertEqual(h.connections[1].commands()[:4], ["TIME", "AREA", "TODAY", "TOMORROW"])
 
     def test_07_reconnect_resends_cached_forecast_without_contacting_jma(self):
         h = Harness(until=100)
@@ -336,7 +353,7 @@ class ServiceBehaviourTests(unittest.TestCase):
         h.clock.at(70, h.plug)
         h.run()
         self.assertEqual(h.fetch_calls, 1)
-        self.assertEqual(h.connections[1].lines[1:3], [h.TODAY, h.TOMORROW])
+        self.assertEqual(h.connections[1].lines[1:4], ["AREA,Example Station\r\n", h.TODAY, h.TOMORROW])
 
     def test_09_forecast_survives_reconnect_even_if_jma_is_down(self):
         h = Harness(until=1900)
@@ -345,7 +362,16 @@ class ServiceBehaviourTests(unittest.TestCase):
         h.clock.at(1850, h.plug)
         h.run()
         self.assertEqual(len(h.connections), 2)
-        self.assertEqual(h.connections[1].lines[1:3], [h.TODAY, h.TOMORROW])
+        self.assertEqual(h.connections[1].lines[1:4], ["AREA,Example Station\r\n", h.TODAY, h.TOMORROW])
+
+    def test_area_lookup_failure_does_not_block_forecasts_and_retries(self):
+        h = Harness(until=62)
+        fetch_label = mock.Mock(side_effect=[URLError("offline"), "Example Station"])
+        h.service.fetch_area_label = fetch_label
+        h.run()
+        self.assertEqual(fetch_label.call_count, 2)
+        fetch_label.assert_called_with("12345")
+        self.assertEqual(h.connections[0].commands(), ["TIME", "TODAY", "TOMORROW", "TIME", "AREA"])
 
 
 class CdcLineFormatTests(unittest.TestCase):
