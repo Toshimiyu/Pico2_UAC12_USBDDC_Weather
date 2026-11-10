@@ -1,0 +1,8 @@
+build
+!.vscode/*
+__pycache__/
+*.py[cod]
+/Measurement_Data/
+/image.png
+/image-1.png
+/image-2.png

@@ -1,0 +1,13 @@
+SECTIONS
+{
+    .dma_sram_bank7 (NOLOAD) :
+    {
+        . = ALIGN(4);
+        __dma_sram_bank7_start__ = .;
+        KEEP(*(.dma_sram_bank7))
+        . = ALIGN(4);
+        __dma_sram_bank7_end__ = .;
+    } > DMA_SRAM_BANK7
+
+    ASSERT(SIZEOF(.dma_sram_bank7) <= LENGTH(DMA_SRAM_BANK7), "DMA buffers exceed SRAM bank 7")
+}

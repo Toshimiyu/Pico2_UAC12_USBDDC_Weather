@@ -1,0 +1,4 @@
+MEMORY
+{
+    DMA_SRAM_BANK7 (rw) : ORIGIN = 0x20070000, LENGTH = 64k
+}
