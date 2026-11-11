@@ -85,7 +85,7 @@ USB mute and unmute apply an approximately 5 ms linear gain ramp to incoming PCM
 
 ### Complete System
 
-These photos show this project running on the hardware. The Weather-screen photo predates the addition of the location name.
+These photos show this project running on the hardware. The Weather screen also displays the name of the configured temperature location.
 
 > **Important assembly note (orientation and placement)**
 >
