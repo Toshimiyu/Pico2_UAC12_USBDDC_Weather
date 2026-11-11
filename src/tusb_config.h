@@ -70,7 +70,7 @@ extern "C" {
 //------------- CLASS -------------//
 #define CFG_TUD_AUDIO             1
 #define CFG_TUD_HID               0
-#define CFG_TUD_CDC               USB_CDC_ENABLED
+#define CFG_TUD_CDC               (USB_CDC_ENABLED ? 2 : 0)
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0
 #define CFG_TUD_VENDOR            0

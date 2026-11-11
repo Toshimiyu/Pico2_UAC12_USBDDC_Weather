@@ -15,6 +15,7 @@ The USB audio subsystem has been redesigned around TinyUSB, allowing USB Audio C
 - Windows weather service sending the Japan Meteorological Agency forecast for a user-selected area and time over USB CDC
 - Three-second B-button switch between the Weather and diagnostic screens
 - Weather service detects USB disconnection, reconnects the COM port, and resends cached forecasts
+- Two separate USB CDC ports for weather reception and diagnostic logging
 - USB CDC diagnostic logging in diagnostic mode
 
 ### Audio and Diagnostic Features
@@ -27,7 +28,7 @@ Audio processing remains:
 
 Before USB audio data is written to the ring buffer, its PCM sample width (16/24/32-bit) and stereo frame boundaries are checked. If an invalid format or boundary is detected, the TinyUSB OUT FIFO is cleared to resynchronize and the event is recorded in diagnostic counters and, when enabled, the CDC log. The existing state machine continues to operate; in the internal `UNDERFLOW_FATAL` state (shown as `UDF!` in the Diagnostics screen's STATE display), it waits for valid data to accumulate and resumes through the normal rebuffering sequence.
 
-The firmware also measures abrupt changes between adjacent input PCM samples and records threshold crossings as `PCM_CLICK_CANDIDATE`. This diagnostic does not change the audio data or playback gain. Normal high-frequency signals may also be reported, so a candidate does not confirm an audible click.
+In diagnostic mode, the firmware also measures abrupt changes between adjacent input PCM samples and records threshold crossings as `PCM_CLICK_CANDIDATE`. This diagnostic does not change the audio data or playback gain. Normal high-frequency signals may also be reported, so a candidate does not confirm an audible click.
 
 Display features such as the 11-band FFT analyzer, real-time level meters, and buffer water-level monitor have been retained and improved.
 
@@ -37,6 +38,14 @@ Display features such as the 11-band FFT analyzer, real-time level meters, and b
 - Toolchain 15_2_Rel1
 
 ## Version History
+
+### v1.1 — Dual CDC
+
+- Separates CDC into Weather Service and USB Diagnostics ports, allowing diagnostic logs to be viewed while the weather service is running.
+- Continues weather reception in DIAG MODE. Diagnostic CSV output remains active only in DIAG MODE.
+- The weather service can auto-detect the weather interface or connect to an explicitly specified COM port.
+
+On actual hardware, the standard UAC2 build was verified for recognition and use of both the Weather Service and USB Diagnostics ports, weather service transmission, diagnostic CSV capture, and audio playback. No noise was heard during rapid sample-rate switching.
 
 ### v1.0 — Initial Release
 
@@ -115,7 +124,7 @@ Pico2 + Pico Audio Pack (PCM5100A) + Pico Display Pack 2.0
 
 After startup, GADGET MODE (the standard mode) is active. In GADGET MODE, X cycles through playback, Weather, and boot screens; the diagnostic screen is reserved for DIAG MODE and is not shown during normal screen cycling. Hold B for 3 seconds on the Weather or diagnostics screen to switch between GADGET MODE and DIAG MODE (diagnostics screen). On the Weather screen a 3-2-1 countdown is shown, and releasing B before the switch cancels it.
 
-To reduce load during music playback, the Weather screen redraws only changed data fields and changed date/time characters; fixed labels and dividers are not redrawn except when switching pages. Dynamic field updates start at most about 24 times per second, with fills and characters split into small, spaced-out operations that run only when the audio buffer has sufficient headroom.
+To reduce load during music playback, the Weather screen redraws only changed data fields and changed date/time characters; fixed labels and dividers are not redrawn except when switching pages. Dynamic field updates start at most about 10 times per second, with fills and characters split into small, spaced-out operations that run only when the audio buffer has sufficient headroom.
 
 ### Weather Screen
 
@@ -134,17 +143,19 @@ On the diagnostic screen:
 - A+B : Toggle between USB events and recent audio-state history
 - Hold Y for 3 seconds : Reset diagnostic counters and the USB event log (a countdown is shown while holding)
 
-USB event logging starts at boot, and the latest 64 events remain available on the Diag screen. It records USB bus resets/disconnects, descriptor requests, configuration mount/unmount, and UAC control requests. Holding Y for 3 seconds on the Diag screen clears the collected diagnostic values and USB event log. Periodic diagnostic statistics and CDC CSV output are active only in DIAG MODE. Audio playback and FFT processing continue in every display mode.
+USB event logging starts at boot, and the latest 64 events remain available on the Diag screen. It records USB bus resets/disconnects, descriptor requests, configuration mount/unmount, and UAC control requests. Holding Y for 3 seconds on the Diag screen clears the collected diagnostic values and USB event log. The diagnostic screen refreshes periodically every 250 ms (4 times per second). Periodic diagnostic statistics and CDC CSV output are active only in DIAG MODE. Audio playback continues on every screen; FFT and peak analysis run only while the playback screen is displayed.
 
 ### USB CDC Diagnostic Log
 
-The CMake option `USB_BRINGUP_LEVEL=3` enables the CDC interface used by both modes. In GADGET MODE, the CDC port receives weather commands, the diagnostic screen is hidden, and no diagnostic text is emitted. In DIAG MODE, the diagnostic screen is shown and the CDC port emits the CSV log described below; weather reception stops and incoming CDC bytes are discarded. Holding B switches the screen and CDC role together. Levels `0`, `1`, and `2` disable CDC completely. The default is level `3`.
+The CMake option `USB_BRINGUP_LEVEL=3` enables two CDC interfaces, which appear as separate Weather Service and USB Diagnostics COM ports in Windows. The Weather Service port receives weather data in every display mode. GADGET MODE suppresses diagnostic output; DIAG MODE emits the CSV log below on the USB Diagnostics port. Holding B switches the screen and diagnostic logging on or off, but does not change either port's role. Levels `0`, `1`, and `2` disable CDC completely. The default is level `3`.
 
 USB startup levels are `0` (USB off), `1` (TinyUSB initialization only, no CDC), `2` (full operation, no CDC), and `3` (full operation with CDC). The default is `3` for the weather gadget. To disable CDC, specify `-DUSB_BRINGUP_LEVEL=2`.
 
-In DIAG MODE, a PC connected to the virtual COM port receives CSV logs with milliseconds elapsed since the CDC connection. Metadata includes firmware version, prefill values, and UAC mode. Regular samples are emitted every 100 ms as `MS,FREQ,BIT_DEPTH,USB_MODE,HOST_RATE,FEEDBACK_RATE,HF_DIFF_NOW,RING_NOW,RING_MIN,RING_MAX,MAX_HF_DIFF_SESSION,MAX_HF_DIFF_STREAM,STATE`. `HOST_RATE` is estimated over a 250 ms window; `HF_DIFF_NOW` is `HOST_RATE - FEEDBACK_RATE` when both are valid and is otherwise empty. The maximum differences are tracked per CDC session and per streaming period, and `RING_MIN`/`RING_MAX` are the observed ring levels within the log interval. State transitions use `STATE,MS,FROM,TO,RATE,RING,DMA_POOL,USB_MODE`, and anomalies use `ANOMALY,MS,CODE,DETAIL,USB_MODE,STATE,RATE,RING,DMA_POOL`. Add a wall-clock timestamp on the PC if needed.
+In DIAG MODE, a PC connected to the USB Diagnostics COM port receives CSV logs with milliseconds elapsed since the CDC connection. Metadata includes firmware version, prefill values, and UAC mode. Regular samples are emitted every 100 ms as `MS,FREQ,BIT_DEPTH,USB_MODE,HOST_RATE,FEEDBACK_RATE,HF_DIFF_NOW,RING_NOW,RING_MIN,RING_MAX,MAX_HF_DIFF_SESSION,MAX_HF_DIFF_STREAM,STATE`. `USB_MODE` is `UAC1` or `UAC2` according to the build. `HOST_RATE` is estimated from received frames over a 250 ms window; `HF_DIFF_NOW` is the signed `HOST_RATE - FEEDBACK_RATE` when both rates are nonzero and is otherwise empty. `MAX_HF_DIFF_SESSION` is the maximum absolute difference in the CDC session, and `MAX_HF_DIFF_STREAM` is the maximum for the current STREAMING period. `RING_MIN`/`RING_MAX` are the observed ring levels within the log interval. State transitions use `STATE,MS,FROM,TO,RATE,RING,DMA_POOL,USB_MODE`, and anomalies use `ANOMALY,MS,CODE,DETAIL,USB_MODE,STATE,RATE,RING,DMA_POOL`, preserving the state and levels at the event. State transitions are recorded on Core0 when the state changes, allowing timestamps to be compared at finer resolution than periodic samples. Add a wall-clock timestamp on the PC if needed.
 
-The weather service and a terminal cannot use the same COM port simultaneously. Screen-based diagnostics and returning to Weather work while the service is running, but stop the service before opening the COM port in a terminal to view CDC logs.
+The weather service uses the Weather Service COM port, while a terminal can open the separate USB Diagnostics COM port. Both can stay connected at the same time; there is no need to stop the service to view CDC logs.
+
+Normal playback starts or resumes after approximately 6 ms of audio has accumulated in the ring at the current sample rate. While buffering, no new ring data is moved into DMA, but already queued DMA data is drained. The CSV metadata reports this time as `PREFILL_MS`. The existing CMake option `USB_AUDIO_PREFILL_FRAMES` (reported as `PREFILL_FRAMES`) is the legacy start threshold for draining queued data in non-buffering states, not the normal playback prefill amount.
 
 ### PC Weather Service
 
@@ -187,13 +198,21 @@ No area is configured by default. The selection is saved outside the repository 
 
 To change the area, stop the service, run `--setup` again, and restart the service. Existing installations also require this initial area setup after updating. If a scheduled task is already registered, restart it after setup.
 
-The service auto-detects the Pico CDC port by USB VID/PID; use `--port COM5` to select it explicitly. It sends `TIME` on connection and at each minute boundary. After the initial fetch, it fetches the JMA JSON forecast at 50 minutes and 45 seconds past each hour (Japan Standard Time), sending `TODAY` and `TOMORROW` separately. Forecast requests and transmissions avoid the minute boundary to separate them from clock updates. If temperatures are unavailable, the forecast is still sent when conditions and precipitation probability are available, and temperatures are displayed as `--`. If conditions or precipitation probability are unavailable for a date, that day's update is skipped and the previous data is retained.
+The service auto-detects the Weather Service COM port using the USB VID/PID and Windows USB interface number (interface 2). If it cannot identify the port, it fails rather than guessing and lists the candidates; use `--port COM5` to select the Weather Service COM port explicitly. When registering the scheduled task, `-Port COM5` saves that selection. It sends `TIME` on connection and at each minute boundary. After the initial fetch, it fetches the JMA JSON forecast at 50 minutes and 45 seconds past each hour (Japan Standard Time), sending `TODAY` and `TOMORROW` separately. Forecast requests and transmissions avoid the minute boundary to separate them from clock updates. If temperatures are unavailable, the forecast is still sent when conditions and precipitation probability are available, and temperatures are displayed as `--`. If conditions or precipitation probability are unavailable for a date, that day's update is skipped and the previous data is retained.
+
+To list the COM numbers, run the following command. A `location` ending in `:x.2` is Weather Service; `:x.4` is USB Diagnostics. COM numbers themselves are not fixed.
+
+```powershell
+py -c "from serial.tools import list_ports; [print(p.device, p.location) for p in list_ports.comports() if (p.vid, p.pid) == (0x2e8a, 0xfede)]"
+```
+
+When upgrading from v1.0, update both the firmware and the PC service. The old service selects the first matching port and may open the diagnostics port by mistake. COM numbers may change; if the scheduled task has a `-Port` setting, check the Weather Service COM number and re-register the task if necessary. A manually specified port is not automatically validated, so ensure it is the Weather Service port.
 
 Date and time use Japan Standard Time. The displayed high and low temperatures and precipitation probability are respectively the maximum and minimum temperatures and maximum precipitation probability among the forecast values available for that date. The available forecast values vary with the time of day.
 
 The location name is obtained from the JMA observation station list and sent every minute along with the time. If retrieval fails, it is retried every 60 seconds while forecast updates continue. Existing area configurations remain usable. Displaying the name requires updating both the firmware and PC service.
 
-On startup or reconnection it sends `TIME` first, then waits at least 5 seconds before the initial forecast fetch or cached forecast retransmission. Failed JMA requests are retried after at least 60 seconds, avoiding minute boundaries; a missed scheduled fetch runs when processing can resume. If the Pico is disconnected or the COM port is not found, it detects the loss within 1 second and retries every 2 seconds and resends the last forecast after reconnecting. While the Pico is in DIAG MODE (hold the B button for 3 seconds), it discards incoming data; after returning to GADGET MODE (the standard mode), data is applied from the next transmission.
+On startup or reconnection it sends `TIME` first, then waits at least 5 seconds before the initial forecast fetch or cached forecast retransmission. Failed JMA requests are retried after at least 60 seconds, avoiding minute boundaries; a missed scheduled fetch runs when processing can resume. If the Pico is disconnected or the COM port is not found, it detects the loss within 1 second and retries every 2 seconds and resends the last forecast after reconnecting. The Weather Service port continues receiving in DIAG MODE, so weather data remains current when switching back to GADGET MODE.
 
 While the Pico remains powered, it retains the last displayed data if reception is interrupted, although that data can become stale. It is not stored persistently, so after the Pico loses power or restarts, the service must send the data again.
 
@@ -211,20 +230,18 @@ $python = Join-Path (Split-Path (Get-Command pythonw.exe).Source) "python.exe"
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_weather_service.ps1
 # To specify a port
-powershell -ExecutionPolicy Bypass -File tools\install_weather_service.ps1 -Port COM5
+powershell -ExecutionPolicy Bypass -File tools\install_weather_service.ps1 -Port COM5 # Weather Service COM port
 powershell -ExecutionPolicy Bypass -File tools\install_weather_service.ps1 -Uninstall
 ```
 
 The log is written to `%LOCALAPPDATA%\Pico2WeatherService\weather_service.log`. When running manually, use `--log-file` to write a log file.
 
-Stop a manually started service with `Ctrl+C`. If started by Task Scheduler, stop and restart it as follows. Close the terminal's COM port before restarting the service.
+Stop a manually started service with `Ctrl+C`. If started by Task Scheduler, stop and restart it as follows. If a terminal has opened the Weather Service port, close that port before restarting the service. The USB Diagnostics port may remain open.
 
 ```powershell
 Stop-ScheduledTask -TaskName Pico2WeatherService
 Start-ScheduledTask -TaskName Pico2WeatherService
 ```
-
-Normal playback starts or resumes after approximately 6 ms of audio has accumulated in the ring at the current sample rate. While buffering, no new ring data is moved into DMA, but already queued DMA data is drained. The CSV metadata reports this time as `PREFILL_MS`. The existing CMake option `USB_AUDIO_PREFILL_FRAMES` (reported as `PREFILL_FRAMES`) is the legacy start threshold for draining queued data in non-buffering states, not the normal playback prefill amount.
 
 Audio-state history is recorded about every 100 ms during playback. When an anomaly is detected, the approximately 4.8 seconds before and 1.6 seconds after it are retained as a frozen history for review. Detected anomalies are added to the USB log as red `E` entries: `01` buffer underflow, `02` overflow/discard, `03` USB receive FIFO resynchronization, `04` USB bus reset/disconnect, `05` playback output stop, `06` Core0 loop interval overrun, `07` Core1 loop interval overrun, `08` USB OUT packet interval of at least 3 ms, `09` PIO TX FIFO stall, `0A` DMA AHB transfer error, `0B` invalid PCM format, `0C` invalid PCM frame boundary, and `0D` click candidate. Click candidates can also be normal audio. These events also record state, rate, ring fill, and DMA-pool level in the CDC log. PIO stall monitoring starts 10 ms after output begins. Each history entry shows uptime seconds, audio state, ring-buffer level, and DMA-pool level.
 
@@ -315,7 +332,7 @@ Sample Frames
 
 ---
 
-### Diagnostic Counters
+#### Diagnostic Counters
 
 The right side of the diagnostic screen displays processing statistics.
 
@@ -344,7 +361,7 @@ is generally expected.
 
 ---
 
-### USB Event Log
+#### USB Event Log
 
 The bottom area displays USB communication events.
 
@@ -364,7 +381,7 @@ Displayed timestamps indicate seconds after boot.
 
 The USB log is event-driven, not periodic. Holding Y for 3 seconds clears the diagnostic values and event log; subsequent events are recorded normally.
 
-#### Event Symbols
+##### Event Symbols
 
 | Symbol | Meaning |
 |---------|---------|
@@ -399,7 +416,7 @@ Failure
 
 ---
 
-### Information to Capture When Playback Stops
+#### Information to Capture When Playback Stops
 
 If playback stops or audio dropouts occur, capture the diagnostic screen immediately if possible.
 
@@ -757,10 +774,12 @@ Frequency Bands:
 - FFT_LEN = 2048
 - Window Function: Hann Window
 - Weighting: A-Weighting
+- Minimum redraw start interval: 33.334 ms, up to about 30 times per second (`RTA_FRAME_INTERVAL_US` in `src/display_rta.c`)
 - RingBuffer Water-Level Monitoring
 - Feedback-Control Visualization
 
 The display system provides a real-time FFT spectrum visualization and buffer-status indication optimized for RP2350 performance and low display latency.
+After switching to the playback screen, the spectrum remains empty until a new analysis result is available. Analysis starts once the initial screen drawing is complete.
 
 ---
 

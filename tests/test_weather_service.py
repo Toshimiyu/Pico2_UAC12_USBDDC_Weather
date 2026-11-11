@@ -187,6 +187,50 @@ class AreaSetupWindowTests(unittest.TestCase):
                              weather_service.ForecastArea("123456", "123450", "12345"))
 
 
+class PortResolutionTests(unittest.TestCase):
+    def _port(self, device, interface=None, location=None):
+        return mock.Mock(
+            device=device,
+            interface=interface,
+            location=location,
+            vid=weather_service.PICO_VID,
+            pid=weather_service.PICO_PID,
+        )
+
+    def test_explicit_port_is_used_without_enumeration(self):
+        with mock.patch.object(weather_service, "list_ports") as ports:
+            self.assertEqual(weather_service.resolve_port("COM12"), "COM12")
+            ports.comports.assert_not_called()
+
+    def test_auto_detection_selects_weather_interface_not_first_cdc(self):
+        diagnostic = self._port("COM5", location="1-3:x.4")
+        weather = self._port("COM6", location="1-3:x.2")
+        with mock.patch.object(weather_service, "list_ports") as ports:
+            ports.comports.return_value = [diagnostic, weather]
+            self.assertEqual(weather_service.resolve_port(None), "COM6")
+
+    def test_auto_detection_does_not_select_a_diagnostics_only_port(self):
+        diagnostic = self._port("COM5", location="1-3:x.4")
+        with mock.patch.object(weather_service, "list_ports") as ports:
+            ports.comports.return_value = [diagnostic]
+            with self.assertRaisesRegex(RuntimeError, r"--port COMx"):
+                weather_service.resolve_port(None)
+
+    def test_auto_detection_does_not_guess_when_interface_is_unknown(self):
+        unknown = self._port("COM5")
+        with mock.patch.object(weather_service, "list_ports") as ports:
+            ports.comports.return_value = [unknown]
+            with self.assertRaisesRegex(RuntimeError, r"--port COMx"):
+                weather_service.resolve_port(None)
+
+    def test_auto_detection_rejects_ambiguous_dual_cdc_ports(self):
+        ports_found = [self._port("COM5", None), self._port("COM6", None)]
+        with mock.patch.object(weather_service, "list_ports") as ports:
+            ports.comports.return_value = ports_found
+            with self.assertRaisesRegex(RuntimeError, r"--port COMx"):
+                weather_service.resolve_port(None)
+
+
 class FakeClock:
     """Deterministic time source; sleep() advances time and fires scheduled events."""
 

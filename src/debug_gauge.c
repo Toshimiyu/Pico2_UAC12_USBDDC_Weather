@@ -67,7 +67,7 @@
 #define G_LOG_COL_STEP 104
 
 
-#define G_UPDATE_US 500000u // 2 Hz
+#define G_UPDATE_US 250000u // 4 Hz
 #define G_EMA_TAU_S 0.25f
 
 // ---- Colors (RGB565, same convention as display_rta.c) ----------------------------------------------

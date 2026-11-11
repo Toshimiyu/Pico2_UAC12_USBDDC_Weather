@@ -61,5 +61,6 @@ void weather_rx_init(void);
 void weather_rx_set_enabled(bool enabled);
 void weather_rx_task(void);
 void weather_rx_get_snapshot(weather_snapshot_t *snapshot);
+uint32_t weather_rx_generation(void);
 
 #endif

@@ -117,12 +117,27 @@ static void display_service(void)
 		break;
 	}
 	const bool active_diagnostic_mode = display_rta_is_diagnostic_mode();
-	weather_rx_set_enabled(!active_diagnostic_mode);
-	cdc_diagnostics_set_enabled(active_diagnostic_mode);
-	weather_snapshot_t weather_snapshot;
-	weather_rx_get_snapshot(&weather_snapshot);
-	display_rta_set_weather_data(&weather_snapshot);
-	usb_audio_set_diagnostics_enabled(active_diagnostic_mode);
+	static bool mode_initialized;
+	static bool last_diagnostic_mode;
+	if (!mode_initialized || active_diagnostic_mode != last_diagnostic_mode)
+	{
+		mode_initialized = true;
+		last_diagnostic_mode = active_diagnostic_mode;
+		weather_rx_set_enabled(true);
+		cdc_diagnostics_set_enabled(active_diagnostic_mode);
+		usb_audio_set_diagnostics_enabled(active_diagnostic_mode);
+	}
+	static bool weather_initialized;
+	static uint32_t last_weather_generation;
+	const uint32_t weather_generation = weather_rx_generation();
+	if (!weather_initialized || weather_generation != last_weather_generation)
+	{
+		weather_snapshot_t weather_snapshot;
+		weather_rx_get_snapshot(&weather_snapshot);
+		display_rta_set_weather_data(&weather_snapshot);
+		last_weather_generation = weather_generation;
+		weather_initialized = true;
+	}
 
 	if (display_rta_page_service())
 	{

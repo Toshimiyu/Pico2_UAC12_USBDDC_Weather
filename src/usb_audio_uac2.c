@@ -46,8 +46,8 @@ bool usb_audio_class_get_format(uint8_t alt, usb_audio_format_t *format)
 //--------------------------------------------------------------------+
 // UAC2 configuration descriptor
 //--------------------------------------------------------------------+
-#define UAC2_CDC_DESC_LEN (USB_CDC_ENABLED ? TUD_CDC_DESC_LEN : 0)
-#define UAC2_CONFIG_INTERFACE_COUNT (USB_CDC_ENABLED ? ITF_NUM_TOTAL : ITF_NUM_CDC)
+#define UAC2_CDC_DESC_LEN (USB_CDC_ENABLED ? 2 * TUD_CDC_DESC_LEN : 0)
+#define UAC2_CONFIG_INTERFACE_COUNT (USB_CDC_ENABLED ? ITF_NUM_TOTAL : ITF_NUM_CDC_WEATHER)
 #define CONFIG_UAC2_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_AUDIO20_SPEAKER_STEREO_FB_MULTIALT_DESC_LEN + UAC2_CDC_DESC_LEN)
 
 static const uint8_t desc_uac2_configuration[] =
@@ -57,8 +57,11 @@ static const uint8_t desc_uac2_configuration[] =
         ITF_NUM_AUDIO_CONTROL, 0, UAC2_EPNUM_AUDIO_OUT,
         UAC2_EPNUM_AUDIO_FB | 0x80, UAC2_FB_EP_SIZE),
 #if USB_CDC_ENABLED
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, USB_CDC_STRING_INDEX, USB_CDC_EP_NOTIF, 8,
-        USB_CDC_EP_OUT, USB_CDC_EP_IN, 64),
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_WEATHER, USB_CDC_WEATHER_STRING_INDEX,
+        USB_CDC_WEATHER_EP_NOTIF, 8, USB_CDC_WEATHER_EP_OUT, USB_CDC_WEATHER_EP_IN, 64),
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_DIAGNOSTICS, USB_CDC_DIAGNOSTICS_STRING_INDEX,
+        USB_CDC_DIAGNOSTICS_EP_NOTIF, 8, USB_CDC_DIAGNOSTICS_EP_OUT,
+        USB_CDC_DIAGNOSTICS_EP_IN, 64),
 #endif
 };
 

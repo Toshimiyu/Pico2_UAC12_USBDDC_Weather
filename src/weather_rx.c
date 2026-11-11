@@ -22,6 +22,7 @@ static bool receiver_enabled;
 static bool have_valid_rx;
 static uint32_t last_valid_rx_us;
 static uint32_t next_temperature_us;
+static uint32_t snapshot_generation;
 
 static bool parse_unsigned(const char *text, int minimum, int maximum, int *value)
 {
@@ -199,6 +200,26 @@ static bool parse_time(char **fields, weather_snapshot_t *updated)
 	return true;
 }
 
+static bool same_day(const weather_day_t *a, const weather_day_t *b)
+{
+	return a->first == b->first && a->connector == b->connector &&
+		a->second == b->second && a->high_c == b->high_c &&
+		a->low_c == b->low_c &&
+		a->precipitation_percent == b->precipitation_percent &&
+		a->has_temperature == b->has_temperature && a->valid == b->valid;
+}
+
+static bool same_snapshot(const weather_snapshot_t *a, const weather_snapshot_t *b)
+{
+	return a->year == b->year && a->month == b->month && a->day == b->day &&
+		a->hour == b->hour && a->minute == b->minute && a->has_time == b->has_time &&
+		strcmp(a->area_label, b->area_label) == 0 &&
+		same_day(&a->today, &b->today) && same_day(&a->tomorrow, &b->tomorrow) &&
+		a->pico_temperature_tenths_c == b->pico_temperature_tenths_c &&
+		a->has_pico_temperature == b->has_pico_temperature &&
+		a->usb_status == b->usb_status;
+}
+
 static bool parse_weather_line(char *line)
 {
 	char *fields[8];
@@ -237,10 +258,14 @@ static bool parse_weather_line(char *line)
 	if (!valid)
 		return false;
 
-	weather_snapshot = updated;
+	updated.usb_status = WEATHER_USB_OK;
+	if (!same_snapshot(&weather_snapshot, &updated))
+	{
+		weather_snapshot = updated;
+		snapshot_generation++;
+	}
 	last_valid_rx_us = time_us_32();
 	have_valid_rx = true;
-	weather_snapshot.usb_status = WEATHER_USB_OK;
 	return true;
 }
 
@@ -282,9 +307,15 @@ static void sample_temperature(uint32_t now)
 	const uint16_t raw = adc_read();
 	const float voltage = (float)raw * (3.3f / 4095.0f);
 	const float temperature_c = 27.0f - (voltage - 0.706f) / 0.001721f;
-	weather_snapshot.pico_temperature_tenths_c =
+	const int16_t temperature =
 		(int16_t)(temperature_c * 10.0f + (temperature_c >= 0.0f ? 0.5f : -0.5f));
-	weather_snapshot.has_pico_temperature = true;
+	if (!weather_snapshot.has_pico_temperature ||
+		weather_snapshot.pico_temperature_tenths_c != temperature)
+	{
+		weather_snapshot.pico_temperature_tenths_c = temperature;
+		weather_snapshot.has_pico_temperature = true;
+		snapshot_generation++;
+	}
 }
 
 void weather_rx_init(void)
@@ -306,9 +337,12 @@ void weather_rx_task(void)
 	const uint32_t now = time_us_32();
 	sample_temperature(now);
 
-	if (have_valid_rx &&
+	if (have_valid_rx && weather_snapshot.usb_status != WEATHER_USB_LOST &&
 		(uint32_t)(now - last_valid_rx_us) >= WEATHER_USB_TIMEOUT_US)
+	{
 		weather_snapshot.usb_status = WEATHER_USB_LOST;
+		snapshot_generation++;
+	}
 
 #if USB_CDC_ENABLED
 	// Poll the CDC FIFO only every 50 ms (RX FIFO is 256 bytes) to keep the
@@ -317,17 +351,17 @@ void weather_rx_task(void)
 	if (!receiver_enabled || (int32_t)(now - next_poll_us) < 0)
 		return;
 	next_poll_us = now + 50000u;
-	if (!tud_cdc_connected())
+	if (!tud_cdc_n_connected(0))
 		return;
 
 	uint8_t bytes[64];
 	for (uint32_t pass = 0; pass < 4; ++pass)
 	{
-		const uint32_t available = tud_cdc_available();
+		const uint32_t available = tud_cdc_n_available(0);
 		if (available == 0)
 			break;
 		const uint32_t count = available < sizeof(bytes) ? available : sizeof(bytes);
-		const uint32_t received = tud_cdc_read(bytes, count);
+		const uint32_t received = tud_cdc_n_read(0, bytes, count);
 		for (uint32_t index = 0; index < received; ++index)
 			receive_byte(bytes[index]);
 	}
@@ -338,4 +372,9 @@ void weather_rx_get_snapshot(weather_snapshot_t *snapshot)
 {
 	if (snapshot != NULL)
 		*snapshot = weather_snapshot;
+}
+
+uint32_t weather_rx_generation(void)
+{
+	return snapshot_generation;
 }

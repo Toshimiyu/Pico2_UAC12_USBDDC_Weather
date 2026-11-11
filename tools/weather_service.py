@@ -31,6 +31,11 @@ JMA_FORECAST_URL = "https://www.jma.go.jp/bosai/forecast/data/forecast/{}.json"
 JST = timezone(timedelta(hours=9))
 PICO_VID = 0x2E8A
 PICO_PID = 0xFEDE
+WEATHER_CDC_INTERFACE = "Weather Service"
+WEATHER_CDC_INTERFACE_NUMBER = 2
+DIAGNOSTICS_CDC_INTERFACE_NUMBER = 4
+DIAGNOSTICS_CDC_INTERFACE = "USB Diagnostics"
+LEGACY_CDC_INTERFACE = "Weather/Diagnostic CDC"
 WEATHER_TYPES = ("晴れ", "曇り", "雨", "雪")
 CONNECTORS = ("", "時々", "のち")
 
@@ -269,14 +274,64 @@ def fetch_forecast(office: str) -> list[dict[str, Any]]:
     return payload
 
 
+def _cdc_interface_role(port: Any) -> str | None:
+    interface = (getattr(port, "interface", None) or "").strip().casefold()
+    if interface == WEATHER_CDC_INTERFACE.casefold():
+        return "weather"
+    if interface == DIAGNOSTICS_CDC_INTERFACE.casefold():
+        return "diagnostics"
+    if interface == LEGACY_CDC_INTERFACE.casefold():
+        return "legacy"
+
+    interface_number = _port_interface_number(port)
+    if interface_number == WEATHER_CDC_INTERFACE_NUMBER:
+        return "weather"
+    if interface_number == DIAGNOSTICS_CDC_INTERFACE_NUMBER:
+        return "diagnostics"
+    return None
+
+
+def _port_interface_number(port: Any) -> int | None:
+    location = getattr(port, "location", None) or ""
+    suffix = location.rsplit(":x.", 1)
+    if len(suffix) == 2 and suffix[1].isdigit():
+        return int(suffix[1])
+    return None
+
+
 def resolve_port(requested_port: str | None) -> str:
     if requested_port:
         return requested_port
     if list_ports is None:
         raise RuntimeError("Install the serial dependency with: py -m pip install -r requirements-weather.txt")
-    for port in list_ports.comports():
-        if port.vid == PICO_VID and port.pid == PICO_PID:
-            return port.device
+    pico_ports = [
+        port for port in list_ports.comports()
+        if port.vid == PICO_VID and port.pid == PICO_PID
+    ]
+    weather_ports = [
+        port for port in pico_ports
+        if _cdc_interface_role(port) == "weather"
+    ]
+    if len(weather_ports) == 1:
+        return weather_ports[0].device
+    if len(weather_ports) > 1:
+        raise RuntimeError(
+            "Multiple Pico Weather Service CDC ports were found. Specify the weather COM port with --port COMx."
+        )
+    if len(pico_ports) == 1:
+        if _cdc_interface_role(pico_ports[0]) == "legacy":
+            return pico_ports[0].device
+    if pico_ports:
+        port_descriptions = []
+        for port in pico_ports:
+            interface_number = _port_interface_number(port)
+            interface_label = str(interface_number) if interface_number is not None else "unknown"
+            port_descriptions.append(f"{port.device} (USB interface {interface_label})")
+        available_ports = ", ".join(port_descriptions)
+        raise RuntimeError(
+            "Could not identify the Pico Weather Service CDC port. "
+            f"Matching Pico COM ports: {available_ports}. Specify it with --port COMx."
+        )
     raise RuntimeError(
         "Pico CDC port not found. Connect the device or specify --port COMx."
     )

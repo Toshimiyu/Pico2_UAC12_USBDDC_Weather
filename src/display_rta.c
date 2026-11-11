@@ -17,6 +17,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 // ===================================================
 // Color theme definitions (collaboration: GEMINI Amber x COP Navy).
@@ -43,6 +44,7 @@
 #define PEAK_FALL_SPEED   4     // Peak marker fall distance every 50 ms (shared by FFT and L/R meters).
 #define METER_PEAK_FALL_SPEED PEAK_FALL_SPEED
 #define RTA_BAR_RELEASE_PIXELS_PER_SEC 100u // Bar fall speed (drops the full height in about one second).
+#define RTA_FRAME_INTERVAL_US 33334u
 #define PEAK_NONE_Y       0xFFFF// Invalid value indicating that the peak is hidden.
 
 #define RTA_BAR_W         10
@@ -186,6 +188,8 @@ static uint8_t cur_r_bands[SPECTRUM_BAND_COUNT] = {0};
 static uint8_t spectrum_l[SPECTRUM_BAND_COUNT];
 static volatile uint8_t input_l_bands[SPECTRUM_BAND_COUNT] = {0};
 static volatile uint8_t input_r_bands[SPECTRUM_BAND_COUNT] = {0};
+static atomic_uint_least32_t input_bands_generation;
+static atomic_bool spectrum_active;
 static uint8_t cur_l_peak = 0;
 static uint8_t cur_r_peak = 0;
 static volatile uint8_t input_l_peak = 0;
@@ -252,6 +256,8 @@ extern volatile bool audio_data_seen;
 
 static volatile bool display_dirty = false;
 static bool render_pending = false;
+static uint32_t rta_next_frame_us;
+static bool rta_frame_rate_started;
 static uint8_t render_step = 0;
 #define FORMAT_TEXT_CHARS 18
 static char format_render_text[FORMAT_TEXT_CHARS + 1];
@@ -264,7 +270,7 @@ static bool format_render_active = false;
 #define FORMAT_TEXT_X0    (160 - (FORMAT_TEXT_CHARS * FORMAT_TEXT_CHAR_WIDTH) / 2)
 // DISPLAY_MIN_AUDIO_HEADROOM_SAMPLES is defined in common.h (follows the FB target level)
 
-static uint8_t lcd_fill_chunk[512];   
+static uint32_t lcd_fill_chunk[128];
 
 typedef enum {
     PAGE_DRAW_FILL,
@@ -396,15 +402,16 @@ gpio_put(LCD_CS_PIN, 0);
 
 const uint8_t hi = (uint8_t)(color >> 8);
 const uint8_t lo = (uint8_t)color;
-for (uint32_t i = 0; i < sizeof(lcd_fill_chunk); i += 2) {
-lcd_fill_chunk[i] = hi;
-lcd_fill_chunk[i + 1] = lo;
-}
 uint32_t remaining = (uint32_t)w * h * 2u;
+const uint32_t fill_bytes = remaining < sizeof(lcd_fill_chunk) ? remaining : sizeof(lcd_fill_chunk);
+const uint32_t pair = (uint32_t)hi | ((uint32_t)lo << 8);
+const uint32_t word = pair | (pair << 16);
+for (uint32_t i = 0; i < (fill_bytes + 3u) / 4u; ++i)
+lcd_fill_chunk[i] = word;
 while (remaining > 0) {
 const uint32_t chunk = remaining > sizeof(lcd_fill_chunk)
 ? sizeof(lcd_fill_chunk) : remaining;
-spi_write_blocking(spi0, lcd_fill_chunk, chunk);
+spi_write_blocking(spi0, (const uint8_t *)lcd_fill_chunk, chunk);
 remaining -= chunk;
 }
 gpio_put(LCD_CS_PIN, 1);
@@ -678,7 +685,8 @@ format_render_pos = 0;
 format_render_active = true;
 }
 
-void display_rta_set_bands(const uint8_t l_bands[SPECTRUM_BAND_COUNT], const uint8_t r_bands[SPECTRUM_BAND_COUNT]) {
+static void display_rta_set_bands_generation(const uint8_t l_bands[SPECTRUM_BAND_COUNT],
+const uint8_t r_bands[SPECTRUM_BAND_COUNT], uint32_t generation) {
 bool changed = false;
 for (int i = 0; i < SPECTRUM_BAND_COUNT; i++) {
 const uint8_t left = (l_bands[i] > 100) ? 100 : l_bands[i];
@@ -687,7 +695,12 @@ if (input_l_bands[i] != left || input_r_bands[i] != right) changed = true;
 input_l_bands[i] = left;
 input_r_bands[i] = right;
 }
+atomic_store_explicit(&input_bands_generation, generation, memory_order_release);
 if (changed) display_dirty = true;
+}
+
+void display_rta_set_bands(const uint8_t l_bands[SPECTRUM_BAND_COUNT], const uint8_t r_bands[SPECTRUM_BAND_COUNT]) {
+display_rta_set_bands_generation(l_bands, r_bands, spectrum_generation());
 }
 
 void display_rta_set_peak(uint8_t l_peak, uint8_t r_peak) {
@@ -1130,7 +1143,7 @@ display_ready = true;
 #define WEATHER_CENTER_X 160
 #define WEATHER_LEFT_CENTER_X 84
 #define WEATHER_RIGHT_CENTER_X 235
-#define WEATHER_RENDER_INTERVAL_US (1000000u / 24u)
+#define WEATHER_RENDER_INTERVAL_US 100000u
 #define WEATHER_DRAW_OP_INTERVAL_US 2000u
 
 static uint32_t weather_next_render_us;
@@ -1308,22 +1321,29 @@ static void draw_weather_pico_temperature(void)
 	{
 		const int temperature = weather_data.pico_temperature_tenths_c;
 		const int absolute_temperature = temperature < 0 ? -temperature : temperature;
-		snprintf(text, sizeof(text), "%s%d.%dC",
+		snprintf(text, sizeof(text), "%s%d.%d",
 			temperature < 0 ? "-" : "", absolute_temperature / 10,
 			absolute_temperature % 10);
 		const uint16_t temperature_color = temperature >= 600 ? 0xF800 :
 			(temperature >= 500 ? 0xFFE0 : COLOR_PEAK_DOT);
 		uint8_t temperature_scale_x = 2;
-		uint16_t value_width = (uint16_t)(strlen(text) * 8u * temperature_scale_x);
+		uint16_t value_width = (uint16_t)((strlen(text) + 1u) * 8u * temperature_scale_x + 5u);
 		while (32u + 8u + value_width > 144u && temperature_scale_x > 1) {
 			temperature_scale_x--;
-			value_width = (uint16_t)(strlen(text) * 8u * temperature_scale_x);
+			value_width = (uint16_t)((strlen(text) + 1u) * 8u * temperature_scale_x + 5u);
 		}
 		const uint16_t total_width = 32u + 8u + value_width;
 		uint16_t x = WEATHER_LEFT_CENTER_X - total_width / 2u;
 		lcd_draw_string_scaled(x, 194, "PICO", temperature_color, COLOR_BG, 1, 1);
 		x += 40u;
 		lcd_draw_string_scaled(x, 194, text, temperature_color, COLOR_BG,
+			temperature_scale_x, 1);
+		x += (uint16_t)(strlen(text) * 8u * temperature_scale_x);
+		lcd_fill_rect(x + 1u, 194, 1, 1, temperature_color);
+		lcd_fill_rect(x, 195, 1, 1, temperature_color);
+		lcd_fill_rect(x + 2u, 195, 1, 1, temperature_color);
+		lcd_fill_rect(x + 1u, 196, 1, 1, temperature_color);
+		lcd_draw_char_scaled(x + 5u, 194, 'C', temperature_color, COLOR_BG,
 			temperature_scale_x, 1);
 	}
 }
@@ -1507,7 +1527,9 @@ void display_rta_set_page(display_page_t page)
         return;
     }
 
+    atomic_store_explicit(&spectrum_active, false, memory_order_release);
     current_page = page;
+    rta_frame_rate_started = false;
     weather_drawn_valid = false;
     weather_ops_pending = false;
     weather_next_element = 0;
@@ -1586,8 +1608,8 @@ bool display_rta_page_service(void)
             lcd_set_window(0, page_clear_row, 319, page_clear_row);
             gpio_put(LCD_DC_PIN, 1);
             gpio_put(LCD_CS_PIN, 0);
-            spi_write_blocking(spi0, lcd_fill_chunk, sizeof(lcd_fill_chunk));
-            spi_write_blocking(spi0, lcd_fill_chunk, 128);
+            spi_write_blocking(spi0, (const uint8_t *)lcd_fill_chunk, sizeof(lcd_fill_chunk));
+            spi_write_blocking(spi0, (const uint8_t *)lcd_fill_chunk, 128);
             gpio_put(LCD_CS_PIN, 1);
             page_clear_row++;
             if (page_clear_row < 240)
@@ -1644,6 +1666,18 @@ bool display_rta_page_service(void)
         {
             page_draw_pending = false;
             page_ready = true;
+            if (current_page == DISPLAY_PAGE_PLAYBACK)
+            {
+                spectrum_feed_restart();
+                for (uint8_t i = 0; i < SPECTRUM_BAND_COUNT; ++i) {
+                    input_l_bands[i] = 0;
+                    input_r_bands[i] = 0;
+                }
+                input_l_peak = 0;
+                input_r_peak = 0;
+                reset_peak_dots_pending = false;
+                atomic_store_explicit(&spectrum_active, true, memory_order_release);
+            }
         }
     }
 
@@ -1653,6 +1687,11 @@ bool display_rta_page_service(void)
 bool display_rta_page_ready(void)
 {
     return page_ready;
+}
+
+bool display_rta_spectrum_active(void)
+{
+    return atomic_load_explicit(&spectrum_active, memory_order_acquire);
 }
 
 display_button_action_t display_rta_process_buttons(void)
@@ -1781,7 +1820,7 @@ display_button_action_t display_rta_process_buttons(void)
 }
 
 bool display_rta_process_fft_left(void) {
-if (!display_ready) return false;
+if (!display_rta_spectrum_active()) return false;
 
 const uint32_t now = time_us_32();
 const bool timed_out = audio_data_seen && (uint32_t)(now - audio_last_data_us) >= 200000u;
@@ -1797,8 +1836,10 @@ return spectrum_process_left(spectrum_l);
 
 void display_rta_process_fft_right(void) {
 uint8_t spectrum_r[SPECTRUM_BAND_COUNT];
-if (spectrum_process_right(spectrum_r))
-display_rta_set_bands(spectrum_l, spectrum_r);
+const uint32_t generation = spectrum_processing_generation();
+if (spectrum_process_right(spectrum_r) && display_rta_spectrum_active()) {
+display_rta_set_bands_generation(spectrum_l, spectrum_r, generation);
+}
 }
 
 static bool peak_decay_due(void) {
@@ -1865,8 +1906,14 @@ return;
 
 if (!audio_slack) return;
 
-if (!display_dirty && !reset_peak_dots_pending && !render_pending && !peak_decay_due()) return;
-if (!render_pending) display_dirty = false;
+if (!render_pending) {
+const uint32_t now = time_us_32();
+if (rta_frame_rate_started && (int32_t)(now - rta_next_frame_us) < 0) return;
+rta_frame_rate_started = true;
+rta_next_frame_us = now + RTA_FRAME_INTERVAL_US;
+if (!display_dirty && !reset_peak_dots_pending && !peak_decay_due()) return;
+display_dirty = false;
+}
 display_rta_update();
 }
 
@@ -1887,9 +1934,10 @@ memset(peak_r_hold_until, 0, sizeof(peak_r_hold_until));
 memset(peak_l_next_fall, 0, sizeof(peak_l_next_fall));
 memset(peak_r_next_fall, 0, sizeof(peak_r_next_fall));
 }
+const bool bands_current = atomic_load_explicit(&input_bands_generation, memory_order_acquire) == spectrum_generation();
 for (int i = 0; i < SPECTRUM_BAND_COUNT; ++i) {
-cur_l_bands[i] = input_l_bands[i];
-cur_r_bands[i] = input_r_bands[i];
+cur_l_bands[i] = bands_current ? input_l_bands[i] : 0;
+cur_r_bands[i] = bands_current ? input_r_bands[i] : 0;
 }
 cur_l_peak = input_l_peak;
 cur_r_peak = input_r_peak;

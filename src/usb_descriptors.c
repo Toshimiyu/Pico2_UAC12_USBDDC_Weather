@@ -56,7 +56,8 @@ enum {
   STRID_PRODUCT,
   STRID_SERIAL,
   STRID_AUDIO_INTERFACE,
-  STRID_CDC_INTERFACE = USB_CDC_STRING_INDEX,
+  STRID_CDC_WEATHER_INTERFACE = USB_CDC_WEATHER_STRING_INDEX,
+  STRID_CDC_DIAGNOSTICS_INTERFACE = USB_CDC_DIAGNOSTICS_STRING_INDEX,
 };
 
 static char const *string_desc_arr[] =
@@ -67,7 +68,8 @@ static char const *string_desc_arr[] =
   NULL,                           // 3: Serial = RP2350 unique board ID
   USB_AUDIO_PRODUCT_NAME,         // 4: Audio Interface
 #if USB_CDC_ENABLED
-  "Weather/Diagnostic CDC",       // 5: CDC Interface
+  USB_CDC_WEATHER_INTERFACE_NAME,       // 5: Weather CDC interface
+  USB_CDC_DIAGNOSTICS_INTERFACE_NAME,   // 6: Diagnostics CDC interface
 #endif
 };
 

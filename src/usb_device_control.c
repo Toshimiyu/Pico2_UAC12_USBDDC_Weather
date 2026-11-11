@@ -449,6 +449,7 @@ void usb_audio_set_diagnostics_enabled(bool enabled)
 		return;
 
 	diagnostics_enabled = enabled;
+	reset_pcm_candidate_history();
 	if (enabled)
 	{
 		host_win_t0_us = time_us_32();
@@ -1017,38 +1018,59 @@ static void service_rx(void)
 
 		rx_frames_counter += frames;
 
-		uint8_t threshold_hits;
-		const uint32_t curvature_q31 = scan_pcm_click_candidate(rx_raw, frames, bps,
-																&threshold_hits);
-		if (curvature_q31 >= PCM_CLICK_CANDIDATE_THRESHOLD_Q31 &&
-			threshold_hits != 0 &&
-			threshold_hits <= PCM_CLICK_CANDIDATE_MAX_HITS_PER_BLOCK)
+		if (diagnostics_enabled)
 		{
-			stats.click_candidate_count++;
-			if (curvature_q31 > stats.max_click_curvature_q31)
-				stats.max_click_curvature_q31 = curvature_q31;
-			usb_audio_log_anomaly(13, (uint8_t)(curvature_q31 >> 24),
-								  "CURVATURE_Q31", curvature_q31);
+			uint8_t threshold_hits;
+			const uint32_t curvature_q31 = scan_pcm_click_candidate(rx_raw, frames, bps,
+																	&threshold_hits);
+			if (curvature_q31 >= PCM_CLICK_CANDIDATE_THRESHOLD_Q31 &&
+				threshold_hits != 0 &&
+				threshold_hits <= PCM_CLICK_CANDIDATE_MAX_HITS_PER_BLOCK)
+			{
+				stats.click_candidate_count++;
+				if (curvature_q31 > stats.max_click_curvature_q31)
+					stats.max_click_curvature_q31 = curvature_q31;
+				usb_audio_log_anomaly(13, (uint8_t)(curvature_q31 >> 24),
+									  "CURVATURE_Q31", curvature_q31);
+			}
 		}
 
 		pcm_to_float(rx_raw, frames, bps, ep_Lch, ep_Rch);
 		const float scale = audio_state.vol_float * DEFAULT_GAIN_RATIO;
 		const bool muted = audio_state.mute;
 		const mute_ramp_t ramp_before = usb_mute_ramp;
-		const float ramp_unit = 1.0f / (float)usb_mute_ramp.frames;
-		for (uint32_t i = 0; i < frames; ++i)
+		if ((!muted && usb_mute_ramp.position == usb_mute_ramp.frames) ||
+			(muted && usb_mute_ramp.position == 0u))
 		{
-			const uint32_t position = mute_ramp_next(&usb_mute_ramp, muted);
-			const float sample_scale = position == usb_mute_ramp.frames ? scale :
-				(position == 0u ? 0.0f : scale * ((float)position * ramp_unit));
-			ep_Lch[i] *= sample_scale;
-			ep_Rch[i] *= sample_scale;
-			pcm_stereo[2u * i] = (int32_t)ep_Lch[i];
-			pcm_stereo[2u * i + 1u] = (int32_t)ep_Rch[i];
+			const float sample_scale = muted ? 0.0f : scale;
+			for (uint32_t i = 0; i < frames; ++i)
+			{
+				ep_Lch[i] *= sample_scale;
+				ep_Rch[i] *= sample_scale;
+				pcm_stereo[2u * i] = (int32_t)ep_Lch[i];
+				pcm_stereo[2u * i + 1u] = (int32_t)ep_Rch[i];
+			}
+		}
+		else
+		{
+			const float ramp_unit = 1.0f / (float)usb_mute_ramp.frames;
+			for (uint32_t i = 0; i < frames; ++i)
+			{
+				const uint32_t position = mute_ramp_next(&usb_mute_ramp, muted);
+				const float sample_scale = position == usb_mute_ramp.frames ? scale :
+					(position == 0u ? 0.0f : scale * ((float)position * ramp_unit));
+				ep_Lch[i] *= sample_scale;
+				ep_Rch[i] *= sample_scale;
+				pcm_stereo[2u * i] = (int32_t)ep_Lch[i];
+				pcm_stereo[2u * i + 1u] = (int32_t)ep_Rch[i];
+			}
 		}
 
-		report_peak(ep_Lch, ep_Rch, frames);
-		spectrum_feed_block(ep_Lch, ep_Rch, frames);
+		if (display_rta_spectrum_active())
+		{
+			report_peak(ep_Lch, ep_Rch, frames);
+			spectrum_feed_block(ep_Lch, ep_Rch, frames);
+		}
 		if (ringbuf_write_array_spinlock(pcm_stereo, frames * 2u, &buffer_audio) < 0)
 		{
 			reset_pcm_candidate_history();

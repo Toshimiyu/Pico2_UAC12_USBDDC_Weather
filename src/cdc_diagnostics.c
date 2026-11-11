@@ -91,13 +91,13 @@ static const char *audio_state_name(usb_audio_state_t state)
 
 static bool cdc_write(const char *text, uint32_t length)
 {
-	if (tud_cdc_write_available() < length)
+	if (tud_cdc_n_write_available(1) < length)
 		return false;
 
-	if (tud_cdc_write(text, length) != length)
+	if (tud_cdc_n_write(1, text, length) != length)
 		return false;
 
-	tud_cdc_write_flush();
+	tud_cdc_n_write_flush(1);
 	return true;
 }
 
@@ -305,7 +305,7 @@ void cdc_diagnostics_set_enabled(bool enabled)
 
 bool cdc_diagnostics_is_connected(void)
 {
-	return COM_PORT_OUTPUT_ENABLE && tud_cdc_connected();
+	return COM_PORT_OUTPUT_ENABLE && tud_cdc_n_connected(1);
 }
 
 void cdc_diagnostics_log_anomaly(uint8_t code, const char *detail_name, uint32_t detail_value)
@@ -379,7 +379,22 @@ void cdc_diagnostics_task(void)
 	if (!COM_PORT_OUTPUT_ENABLE)
 		return;
 
-	// In GADGET MODE the CDC port belongs to the weather receiver.
+	const uint32_t now = time_us_32();
+	static uint32_t next_discard_us;
+	if ((int32_t)(now - next_discard_us) >= 0)
+	{
+		next_discard_us = now + 50000u;
+		const uint32_t input_available = tud_cdc_n_available(1);
+		if (input_available != 0)
+		{
+			uint8_t discard[64];
+			const uint32_t discard_length = input_available < sizeof(discard)
+				? input_available : sizeof(discard);
+			tud_cdc_n_read(1, discard, discard_length);
+		}
+	}
+
+	// Suppress diagnostic output in GADGET MODE.
 	if (!diagnostics_enabled)
 	{
 		if (session_active)
@@ -390,7 +405,7 @@ void cdc_diagnostics_task(void)
 		return;
 	}
 
-	if (!tud_cdc_connected())
+	if (!tud_cdc_n_connected(1))
 	{
 		if (session_active)
 		{
@@ -398,21 +413,6 @@ void cdc_diagnostics_task(void)
 			reset_event_queue();
 		}
 		return;
-	}
-
-	const uint32_t now = time_us_32();
-	static uint32_t next_discard_us;
-	if ((int32_t)(now - next_discard_us) >= 0)
-	{
-		next_discard_us = now + 50000u;
-		const uint32_t input_available = tud_cdc_available();
-		if (input_available != 0)
-		{
-			uint8_t discard[64];
-			const uint32_t discard_length = input_available < sizeof(discard)
-				? input_available : sizeof(discard);
-			tud_cdc_read(discard, discard_length);
-		}
 	}
 
 	if (!session_active && !start_session(now))

@@ -48,6 +48,7 @@ void display_rta_set_mode_countdown(uint8_t seconds_remaining);
 void display_rta_set_weather_data(const weather_snapshot_t *snapshot);
 bool display_rta_page_service(void);
 bool display_rta_page_ready(void);
+bool display_rta_spectrum_active(void);
 display_button_action_t display_rta_process_buttons(void);
 void display_rta_splash_service(void);
 void display_rta_update(void);

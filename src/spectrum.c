@@ -10,6 +10,7 @@
 #include "hardware/sync.h"
 #include "arm_math.h"
 #include <math.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #define FFT_BINS (FFT_LEN / 2 + 1)
@@ -33,6 +34,9 @@ static volatile buffer_state_t state[CAPTURE_BUFFERS] = {BUFFER_FILLING, BUFFER_
 static volatile int8_t ready_index = -1;
 static uint8_t fill_index = 0;
 static uint16_t capture_pos = 0;
+static atomic_uint_least32_t capture_generation;
+static uint32_t ready_generation;
+static uint32_t processing_generation;
 static float window[FFT_LEN];
 static float fft_input[FFT_LEN];
 static float fft_output[FFT_LEN];
@@ -217,6 +221,7 @@ void spectrum_set_sample_rate(uint32_t sample_rate)
 {
 for (uint8_t rate = 0; rate < SUPPORTED_RATE_COUNT; ++rate) {
 if (sample_rate == supported_rates[rate]) {
+spectrum_feed_restart();
 active_rate_index = rate;
 low_goertzel_enabled = rate >= 2;
 low_goertzel_pos = 0;
@@ -252,6 +257,28 @@ if (low_goertzel_enabled) {
 return;
 }
 }
+}
+
+void spectrum_feed_restart(void)
+{
+// A ready or processing frame remains owned by Core1; its generation makes
+// it ineligible for display without changing its buffer state here.
+atomic_fetch_add_explicit(&capture_generation, 1u, memory_order_release);
+capture_pos = 0;
+low_goertzel_pos = 0;
+memset(low_goertzel_q1, 0, sizeof(low_goertzel_q1));
+memset(low_goertzel_q2, 0, sizeof(low_goertzel_q2));
+memset((void *)low_goertzel_levels, 0, sizeof(low_goertzel_levels));
+}
+
+uint32_t spectrum_generation(void)
+{
+return atomic_load_explicit(&capture_generation, memory_order_acquire);
+}
+
+uint32_t spectrum_processing_generation(void)
+{
+return processing_generation;
 }
 
 static inline void low_goertzel_feed(float left, float right)
@@ -303,6 +330,7 @@ if (++capture_pos < FFT_LEN) return;
 
 if (ready_index < 0) {
     state[fill_index] = BUFFER_READY;
+    ready_generation = spectrum_generation();
     __dmb();
     ready_index = (int8_t)fill_index;
     const uint8_t other = fill_index ^ 1u;
@@ -360,7 +388,13 @@ if (processing_index >= 0) return false;
 if (!initialized || ready_index < 0) return false;
 const uint8_t index = (uint8_t)ready_index;
 __dmb();
+const uint32_t generation = ready_generation;
 ready_index = -1;
+if (generation != spectrum_generation()) {
+__dmb();
+state[index] = BUFFER_FREE;
+return false;
+}
 if (discard_next_frame) {
 discard_next_frame = false;
 __dmb();
@@ -370,6 +404,7 @@ return false;
 discard_next_frame = true;
 state[index] = BUFFER_PROCESSING;
 processing_index = (int8_t)index;
+processing_generation = generation;
 processing_rate = active_rate_index;
 calculate_channel(capture[index][0], processing_rate, left);
 if (low_goertzel_enabled) {
@@ -393,5 +428,5 @@ if (low_goertzel_enabled) {
 __dmb();
 state[index] = BUFFER_FREE;
 processing_index = -1;
-return true;
+return processing_generation == spectrum_generation();
 }

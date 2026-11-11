@@ -15,6 +15,9 @@
 
 void spectrum_init(void);
 void spectrum_set_sample_rate(uint32_t sample_rate);
+void spectrum_feed_restart(void);
+uint32_t spectrum_generation(void);
+uint32_t spectrum_processing_generation(void);
 void spectrum_feed(float left_q31, float right_q31);
 void spectrum_feed_block(const float *left_q31, const float *right_q31, uint32_t length);
 // One analysis frame is processed in two calls so the caller can service the DMA chain in between.
