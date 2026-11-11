@@ -45,7 +45,7 @@ Display features such as the 11-band FFT analyzer, real-time level meters, and b
 - Continues weather reception in DIAG MODE. Diagnostic CSV output remains active only in DIAG MODE.
 - The weather service can auto-detect the weather interface or connect to an explicitly specified COM port.
 
-On actual hardware, the standard UAC2 build was verified for recognition and use of both the Weather Service and USB Diagnostics ports, weather service transmission, diagnostic CSV capture, and audio playback. No noise was heard during rapid sample-rate switching.
+On actual hardware, the UAC2 configuration was verified for recognition and use of both the Weather Service and USB Diagnostics ports, weather service transmission, diagnostic CSV capture, and audio playback. No noise was heard during rapid sample-rate switching.
 
 ### v1.0 — Initial Release
 
