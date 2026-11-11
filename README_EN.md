@@ -115,7 +115,7 @@ Pico2 + Pico Audio Pack (PCM5100A) + Pico Display Pack 2.0
 
 After startup, GADGET MODE (the standard mode) is active. In GADGET MODE, X cycles through playback, Weather, and boot screens; the diagnostic screen is reserved for DIAG MODE and is not shown during normal screen cycling. Hold B for 3 seconds on the Weather or diagnostics screen to switch between GADGET MODE and DIAG MODE (diagnostics screen). On the Weather screen a 3-2-1 countdown is shown, and releasing B before the switch cancels it.
 
-To reduce load during music playback, dynamic Weather-screen updates are limited to about 24 frames per second. Drawing is also deferred unless the audio buffer has sufficient headroom.
+To reduce load during music playback, the Weather screen redraws only changed data fields and changed date/time characters; fixed labels and dividers are not redrawn except when switching pages. Dynamic field updates start at most about 24 times per second, with fills and characters split into small, spaced-out operations that run only when the audio buffer has sufficient headroom.
 
 ### Weather Screen
 
@@ -187,13 +187,13 @@ No area is configured by default. The selection is saved outside the repository 
 
 To change the area, stop the service, run `--setup` again, and restart the service. Existing installations also require this initial area setup after updating. If a scheduled task is already registered, restart it after setup.
 
-The service auto-detects the Pico CDC port by USB VID/PID; use `--port COM5` to select it explicitly. It sends `TIME` every minute and `TODAY`/`TOMORROW` data for the selected area from the JMA JSON feed every 30 minutes. If temperatures are unavailable, the forecast is still sent when conditions and precipitation probability are available, and temperatures are displayed as `--`. If conditions or precipitation probability are unavailable for a date, that day's update is skipped and the previous data is retained.
+The service auto-detects the Pico CDC port by USB VID/PID; use `--port COM5` to select it explicitly. It sends `TIME` on connection and at each minute boundary. After the initial fetch, it fetches the JMA JSON forecast at 50 minutes and 45 seconds past each hour (Japan Standard Time), sending `TODAY` and `TOMORROW` separately. Forecast requests and transmissions avoid the minute boundary to separate them from clock updates. If temperatures are unavailable, the forecast is still sent when conditions and precipitation probability are available, and temperatures are displayed as `--`. If conditions or precipitation probability are unavailable for a date, that day's update is skipped and the previous data is retained.
 
 Date and time use Japan Standard Time. The displayed high and low temperatures and precipitation probability are respectively the maximum and minimum temperatures and maximum precipitation probability among the forecast values available for that date. The available forecast values vary with the time of day.
 
 The location name is obtained from the JMA observation station list and sent every minute along with the time. If retrieval fails, it is retried every 60 seconds while forecast updates continue. Existing area configurations remain usable. Displaying the name requires updating both the firmware and PC service.
 
-At startup it sends `TIME` and fetches and sends the forecast; if the JMA request fails it retries after 60 seconds. If the Pico is disconnected or the COM port is not found, it detects the loss within 1 second and retries every 2 seconds and resends the last forecast after reconnecting. While the Pico is in DIAG MODE (hold the B button for 3 seconds), it discards incoming data; after returning to GADGET MODE (the standard mode), data is applied from the next transmission.
+On startup or reconnection it sends `TIME` first, then waits at least 5 seconds before the initial forecast fetch or cached forecast retransmission. Failed JMA requests are retried after at least 60 seconds, avoiding minute boundaries; a missed scheduled fetch runs when processing can resume. If the Pico is disconnected or the COM port is not found, it detects the loss within 1 second and retries every 2 seconds and resends the last forecast after reconnecting. While the Pico is in DIAG MODE (hold the B button for 3 seconds), it discards incoming data; after returning to GADGET MODE (the standard mode), data is applied from the next transmission.
 
 While the Pico remains powered, it retains the last displayed data if reception is interrupted, although that data can become stale. It is not stored persistently, so after the Pico loses power or restarts, the service must send the data again.
 

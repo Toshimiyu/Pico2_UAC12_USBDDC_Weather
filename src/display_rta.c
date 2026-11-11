@@ -1131,9 +1131,12 @@ display_ready = true;
 #define WEATHER_LEFT_CENTER_X 84
 #define WEATHER_RIGHT_CENTER_X 235
 #define WEATHER_RENDER_INTERVAL_US (1000000u / 24u)
+#define WEATHER_DRAW_OP_INTERVAL_US 2000u
 
 static uint32_t weather_next_render_us;
 static bool weather_render_rate_started;
+static bool weather_ops_pending;
+static unsigned weather_next_element;
 
 static void draw_weather_screen(void)
 {
@@ -1220,7 +1223,7 @@ static void draw_weather_phrase(uint16_t center_x, uint16_t y, const weather_day
 	draw_weather_condition(&x, y, day->second);
 }
 
-static void draw_weather_day_details(uint16_t center_x, const weather_day_t *day)
+static void draw_weather_day_temperature(uint16_t center_x, const weather_day_t *day)
 {
 	char text[48];
 	if (day->valid && day->has_temperature)
@@ -1228,7 +1231,11 @@ static void draw_weather_day_details(uint16_t center_x, const weather_day_t *day
 	else
 		snprintf(text, sizeof(text), "最高--℃/最低--℃");
 	lcd_draw_utf8_temperature_centered(center_x, 122, text, COLOR_FREQ_TEXT, COLOR_BG);
+}
 
+static void draw_weather_day_precipitation(uint16_t center_x, const weather_day_t *day)
+{
+	char text[48];
 	if (day->valid)
 	{
 		static const char *const fullwidth_digits[] = {
@@ -1252,36 +1259,51 @@ static void draw_weather_day_details(uint16_t center_x, const weather_day_t *day
 	lcd_draw_utf8_string_centered(center_x, 152, text, COLOR_FREQ_TEXT, COLOR_BG, 1);
 }
 
-static void draw_weather_datetime(void)
+static void format_weather_datetime(char *text, size_t size, const weather_snapshot_t *data)
+{
+	if (data->has_time)
+		snprintf(text, size, "%02u/%02u/%02u %02u:%02u",
+			(unsigned)(data->year % 100u), data->month,
+			data->day, data->hour, data->minute);
+	else
+		snprintf(text, size, "--/--/-- --:--");
+}
+
+static void draw_weather_datetime(bool first_draw)
 {
 	char text[32];
-	lcd_fill_rect(10, 27, 300, 21, COLOR_BG);
-	if (weather_data.has_time)
-		snprintf(text, sizeof(text), "%02u/%02u/%02u %02u:%02u",
-			(unsigned)(weather_data.year % 100u), weather_data.month,
-			weather_data.day, weather_data.hour, weather_data.minute);
-	else
-		snprintf(text, sizeof(text), "--/--/-- --:--");
-	lcd_draw_string_centered_scaled(WEATHER_CENTER_X, 33, text,
-		COLOR_FREQ_TEXT, COLOR_BG, 2, 1);
+	char previous[32];
+	format_weather_datetime(text, sizeof(text), &weather_data);
+	format_weather_datetime(previous, sizeof(previous), &weather_drawn_data);
+	const uint16_t x = WEATHER_CENTER_X - (uint16_t)(strlen(text) * 16u) / 2u;
+	for (size_t i = 0; text[i] != '\0'; ++i)
+		if (first_draw || text[i] != previous[i])
+			lcd_draw_char_scaled_width(x + (uint16_t)i * 16u, 33, text[i],
+				COLOR_FREQ_TEXT, COLOR_BG, 16, 1);
 }
 
 static void draw_weather_day_phrase(uint16_t center_x, const weather_day_t *day)
 {
-	lcd_fill_rect(center_x - 72, 84, 144, 34, COLOR_BG);
+	lcd_fill_rect(center_x - 72, 90, 144, 16, COLOR_BG);
 	draw_weather_phrase(center_x, 90, day);
 }
 
-static void draw_weather_day_block(uint16_t center_x, const weather_day_t *day)
+static void draw_weather_temperature(uint16_t center_x, const weather_day_t *day)
 {
-	lcd_fill_rect(center_x - 72, 118, 144, 60, COLOR_BG);
-	draw_weather_day_details(center_x, day);
+	lcd_fill_rect(center_x - 72, 122, 144, 16, COLOR_BG);
+	draw_weather_day_temperature(center_x, day);
+}
+
+static void draw_weather_precipitation(uint16_t center_x, const weather_day_t *day)
+{
+	lcd_fill_rect(center_x - 72, 152, 144, 16, COLOR_BG);
+	draw_weather_day_precipitation(center_x, day);
 }
 
 static void draw_weather_pico_temperature(void)
 {
 	char text[32];
-	lcd_fill_rect(12, 188, 144, 24, COLOR_BG);
+	lcd_fill_rect(12, 194, 144, 8, COLOR_BG);
 	if (weather_data.has_pico_temperature)
 	{
 		const int temperature = weather_data.pico_temperature_tenths_c;
@@ -1308,7 +1330,7 @@ static void draw_weather_pico_temperature(void)
 
 static void draw_weather_usb_status(void)
 {
-	lcd_fill_rect(164, 188, 144, 24, COLOR_BG);
+	lcd_fill_rect(164, 194, 144, 8, COLOR_BG);
 	const char *usb_text = "USB WAIT";
 	uint16_t usb_color = 0x8410;
 	if (weather_data.usb_status == WEATHER_USB_OK)
@@ -1326,35 +1348,21 @@ static void draw_weather_usb_status(void)
 }
 
 // The countdown overlay shares the weather page's bottom status row.
-static void render_mode_countdown(void)
-{
-	if (!mode_countdown_dirty)
-		return;
-	mode_countdown_dirty = false;
-	if (mode_countdown_display == 0)
-	{
-		weather_drawn_valid = false;
-		return;
-	}
-	char text[24];
-	snprintf(text, sizeof(text), "DIAG MODE IN %u", (unsigned)mode_countdown_display);
-	lcd_fill_rect(10, 188, 300, 24, COLOR_DIVIDER);
-	lcd_draw_string_centered(WEATHER_CENTER_X, 194, text, COLOR_PEAK_DOT, COLOR_DIVIDER, 1);
-}
-
 enum {
 	WEATHER_ELEMENT_AREA,
 	WEATHER_ELEMENT_DATETIME,
 	WEATHER_ELEMENT_TODAY_PHRASE,
 	WEATHER_ELEMENT_TOMORROW_PHRASE,
-	WEATHER_ELEMENT_TODAY_DETAILS,
-	WEATHER_ELEMENT_TOMORROW_DETAILS,
+	WEATHER_ELEMENT_TODAY_TEMPERATURE,
+	WEATHER_ELEMENT_TOMORROW_TEMPERATURE,
+	WEATHER_ELEMENT_TODAY_PRECIPITATION,
+	WEATHER_ELEMENT_TOMORROW_PRECIPITATION,
 	WEATHER_ELEMENT_PICO_TEMPERATURE,
 	WEATHER_ELEMENT_USB_STATUS,
 	WEATHER_ELEMENT_COUNT
 };
 
-static uint8_t weather_drawn_mask;
+static uint16_t weather_drawn_mask;
 
 static bool weather_element_dirty(unsigned element)
 {
@@ -1370,11 +1378,28 @@ static bool weather_element_dirty(unsigned element)
 			n->month != o->month || n->day != o->day ||
 			n->hour != o->hour || n->minute != o->minute;
 	case WEATHER_ELEMENT_TODAY_PHRASE:
-	case WEATHER_ELEMENT_TODAY_DETAILS:
-		return memcmp(&n->today, &o->today, sizeof(n->today)) != 0;
 	case WEATHER_ELEMENT_TOMORROW_PHRASE:
-	case WEATHER_ELEMENT_TOMORROW_DETAILS:
-		return memcmp(&n->tomorrow, &o->tomorrow, sizeof(n->tomorrow)) != 0;
+	{
+		const weather_day_t *a = element == WEATHER_ELEMENT_TODAY_PHRASE ? &n->today : &n->tomorrow;
+		const weather_day_t *b = element == WEATHER_ELEMENT_TODAY_PHRASE ? &o->today : &o->tomorrow;
+		return a->valid != b->valid || a->first != b->first ||
+			a->connector != b->connector || a->second != b->second;
+	}
+	case WEATHER_ELEMENT_TODAY_TEMPERATURE:
+	case WEATHER_ELEMENT_TOMORROW_TEMPERATURE:
+	{
+		const weather_day_t *a = element == WEATHER_ELEMENT_TODAY_TEMPERATURE ? &n->today : &n->tomorrow;
+		const weather_day_t *b = element == WEATHER_ELEMENT_TODAY_TEMPERATURE ? &o->today : &o->tomorrow;
+		return a->valid != b->valid || a->has_temperature != b->has_temperature ||
+			a->high_c != b->high_c || a->low_c != b->low_c;
+	}
+	case WEATHER_ELEMENT_TODAY_PRECIPITATION:
+	case WEATHER_ELEMENT_TOMORROW_PRECIPITATION:
+	{
+		const weather_day_t *a = element == WEATHER_ELEMENT_TODAY_PRECIPITATION ? &n->today : &n->tomorrow;
+		const weather_day_t *b = element == WEATHER_ELEMENT_TODAY_PRECIPITATION ? &o->today : &o->tomorrow;
+		return a->valid != b->valid || a->precipitation_percent != b->precipitation_percent;
+	}
 	case WEATHER_ELEMENT_PICO_TEMPERATURE:
 		return n->has_pico_temperature != o->has_pico_temperature ||
 			n->pico_temperature_tenths_c != o->pico_temperature_tenths_c;
@@ -1388,7 +1413,35 @@ static weather_snapshot_t weather_element_drawn[WEATHER_ELEMENT_COUNT];
 
 static void render_weather_page(void)
 {
-	render_mode_countdown();
+	if (weather_ops_pending)
+	{
+		const page_draw_op_t op = page_draw_ops[page_draw_pos++];
+		if (op.type == PAGE_DRAW_FILL)
+			lcd_fill_rect(op.x, op.y, op.w, op.h, op.color);
+		else
+			lcd_draw_char_scaled_width(op.x, op.y, (char)op.character,
+				op.color, op.bg, op.w, op.scale_y);
+		weather_ops_pending = page_draw_pos < page_draw_count;
+		return;
+	}
+	if (mode_countdown_dirty)
+	{
+		mode_countdown_dirty = false;
+		page_draw_begin_capture();
+		lcd_fill_rect(10, 188, 300, 24, mode_countdown_display ? COLOR_DIVIDER : COLOR_BG);
+		if (mode_countdown_display != 0)
+		{
+			char text[24];
+			snprintf(text, sizeof(text), "DIAG MODE IN %u", (unsigned)mode_countdown_display);
+			lcd_draw_string_centered(WEATHER_CENTER_X, 194, text, COLOR_PEAK_DOT, COLOR_DIVIDER, 1);
+		}
+		else
+			weather_drawn_mask &= ~((1u << WEATHER_ELEMENT_PICO_TEMPERATURE) |
+				(1u << WEATHER_ELEMENT_USB_STATUS));
+		page_draw_capture = false;
+		weather_ops_pending = page_draw_count != 0;
+		return;
+	}
 	if (mode_countdown_display != 0)
 		return;
 	if (!weather_drawn_valid)
@@ -1396,31 +1449,41 @@ static void render_weather_page(void)
 		weather_drawn_mask = 0;
 		weather_drawn_valid = true;
 	}
-	for (unsigned element = 0; element < WEATHER_ELEMENT_COUNT; ++element)
+	for (unsigned offset = 0; offset < WEATHER_ELEMENT_COUNT; ++offset)
 	{
+		const unsigned element = (weather_next_element + offset) % WEATHER_ELEMENT_COUNT;
 		weather_drawn_data = weather_element_drawn[element];
 		const bool dirty = weather_element_dirty(element);
 		if (!dirty)
 			continue;
+		page_draw_begin_capture();
 		switch (element) {
 		case WEATHER_ELEMENT_AREA:
 			lcd_fill_rect(132, 6, 176, 16, COLOR_BG);
 			lcd_draw_string_centered(220, 10, weather_data.area_label, COLOR_CH_LABEL, COLOR_BG, 1);
 			break;
-		case WEATHER_ELEMENT_DATETIME: draw_weather_datetime(); break;
+		case WEATHER_ELEMENT_DATETIME:
+			draw_weather_datetime(!(weather_drawn_mask & (1u << element))); break;
 		case WEATHER_ELEMENT_TODAY_PHRASE:
 			draw_weather_day_phrase(WEATHER_LEFT_CENTER_X, &weather_data.today); break;
 		case WEATHER_ELEMENT_TOMORROW_PHRASE:
 			draw_weather_day_phrase(WEATHER_RIGHT_CENTER_X, &weather_data.tomorrow); break;
-		case WEATHER_ELEMENT_TODAY_DETAILS:
-			draw_weather_day_block(WEATHER_LEFT_CENTER_X, &weather_data.today); break;
-		case WEATHER_ELEMENT_TOMORROW_DETAILS:
-			draw_weather_day_block(WEATHER_RIGHT_CENTER_X, &weather_data.tomorrow); break;
+		case WEATHER_ELEMENT_TODAY_TEMPERATURE:
+			draw_weather_temperature(WEATHER_LEFT_CENTER_X, &weather_data.today); break;
+		case WEATHER_ELEMENT_TOMORROW_TEMPERATURE:
+			draw_weather_temperature(WEATHER_RIGHT_CENTER_X, &weather_data.tomorrow); break;
+		case WEATHER_ELEMENT_TODAY_PRECIPITATION:
+			draw_weather_precipitation(WEATHER_LEFT_CENTER_X, &weather_data.today); break;
+		case WEATHER_ELEMENT_TOMORROW_PRECIPITATION:
+			draw_weather_precipitation(WEATHER_RIGHT_CENTER_X, &weather_data.tomorrow); break;
 		case WEATHER_ELEMENT_PICO_TEMPERATURE: draw_weather_pico_temperature(); break;
 		default: draw_weather_usb_status(); break;
 		}
 		weather_element_drawn[element] = weather_data;
 		weather_drawn_mask |= 1u << element;
+		weather_next_element = (element + 1u) % WEATHER_ELEMENT_COUNT;
+		page_draw_capture = false;
+		weather_ops_pending = page_draw_count != 0;
 		return;
 	}
 }
@@ -1446,6 +1509,9 @@ void display_rta_set_page(display_page_t page)
 
     current_page = page;
     weather_drawn_valid = false;
+    weather_ops_pending = false;
+    weather_next_element = 0;
+    weather_render_rate_started = false;
     mode_countdown_display = 0;
     mode_countdown_dirty = false;
     page_clear_row = 0;
@@ -1773,8 +1839,8 @@ const uint32_t now = time_us_32();
 if (display_weather_has_slack() &&
     (!weather_render_rate_started || (int32_t)(now - weather_next_render_us) >= 0)) {
 weather_render_rate_started = true;
-weather_next_render_us = now + WEATHER_RENDER_INTERVAL_US;
 render_weather_page();
+weather_next_render_us = now + (weather_ops_pending ? WEATHER_DRAW_OP_INTERVAL_US : WEATHER_RENDER_INTERVAL_US);
 }
 return;
 }

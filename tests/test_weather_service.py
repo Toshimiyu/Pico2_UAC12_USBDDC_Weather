@@ -1,7 +1,7 @@
 import unittest
 import time
 import tkinter as tk
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -217,13 +217,21 @@ class FakeSerial:
     def __init__(self, link):
         self.link = link
         self.lines = []
+        self.sent_at = []
         self.closed = False
         self.flush_calls = 0
+
+    @property
+    def in_waiting(self):
+        if self.link.broken:
+            raise OSError("device disconnected")
+        return 0
 
     def write(self, data):
         if self.link.broken:
             raise OSError("device disconnected")
         self.lines.append(data.decode("utf-8"))
+        self.sent_at.append(self.link.clock.t)
         return len(data)
 
     def flush(self):
@@ -240,12 +248,14 @@ class Harness:
     TODAY = "TODAY,晴れ,時々,曇り,22,14,10\r\n"
     TOMORROW = "TOMORROW,曇り,,,19,12,40\r\n"
 
-    def __init__(self, until):
+    def __init__(self, until, start=None):
         self.clock = FakeClock(until)
+        self.start = start or datetime(2026, 11, 10, 18, 0, tzinfo=weather_service.JST)
         self.broken = False
         self.connections = []
         self.open_attempts = 0
         self.fetch_calls = 0
+        self.fetch_times = []
         self.fetch_error = None
         self.service = weather_service.WeatherService(
             None,
@@ -256,7 +266,7 @@ class Harness:
             resolve=lambda _: "COM9",
             monotonic=self.clock.monotonic,
             sleep=self.clock.sleep,
-            clock=lambda: datetime(2026, 11, 10, 18, 0, tzinfo=weather_service.JST),
+            clock=lambda: self.start + timedelta(seconds=self.clock.t),
         )
 
     def open_port(self, _port):
@@ -270,6 +280,7 @@ class Harness:
     def fetch(self, office):
         self.office = office
         self.fetch_calls += 1
+        self.fetch_times.append(self.clock.t)
         if self.fetch_error:
             raise self.fetch_error
         return []
@@ -291,11 +302,12 @@ class Harness:
 
 class ServiceBehaviourTests(unittest.TestCase):
     def test_01_startup_sends_time_today_tomorrow_in_order(self):
-        h = Harness(until=1)
+        h = Harness(until=7)
         h.run()
         self.assertEqual(h.connections[0].commands(), ["TIME", "AREA", "TODAY", "TOMORROW"])
         self.assertEqual(h.connections[0].lines[0], "TIME,2026,11,10,18,0\r\n")
         self.assertEqual(h.connections[0].flush_calls, 0)
+        self.assertEqual(h.connections[0].sent_at, [0, 0, 5, 6])
 
     def test_02_time_is_sent_every_minute(self):
         for until, expected in ((60, 1), (61, 2), (121, 3)):
@@ -304,22 +316,23 @@ class ServiceBehaviourTests(unittest.TestCase):
             self.assertEqual(h.connections[0].commands().count("TIME"), expected, until)
             self.assertEqual(h.connections[0].commands().count("AREA"), expected, until)
 
-    def test_03_forecast_refreshes_every_30_minutes(self):
-        h = Harness(until=1801)
+    def test_03_forecast_refreshes_at_50_minutes_45_seconds(self):
+        h = Harness(until=6646)
         h.run()
-        self.assertEqual(h.fetch_calls, 2)
+        self.assertEqual(h.fetch_times, [5, 3045, 6645])
         commands = h.connections[0].commands()
-        self.assertEqual(commands.count("TODAY"), 2)
+        self.assertEqual(commands.count("TODAY"), 3)
         self.assertEqual(commands.count("TOMORROW"), 2)
-        self.assertEqual(commands[-2:], ["TODAY", "TOMORROW"])
+        self.assertEqual(h.connections[0].sent_at[-1], 6645)
 
     def test_04_fetch_failure_keeps_running_and_retries_after_60_seconds(self):
-        h = Harness(until=1861)
-        h.clock.at(1799, lambda: setattr(h, "fetch_error", URLError("offline")))
-        h.clock.at(1830, lambda: setattr(h, "fetch_error", None))
+        h = Harness(until=3107)
+        h.clock.at(3044, lambda: setattr(h, "fetch_error", URLError("offline")))
+        h.clock.at(3070, lambda: setattr(h, "fetch_error", None))
         h.run()
-        # Fetches at 0, 1800 (fails), 1860 (retry succeeds).
+        # Fetches at 5, 3045 (fails), 3105 (retry succeeds).
         self.assertEqual(h.fetch_calls, 3)
+        self.assertEqual(h.fetch_times, [5, 3045, 3105])
         self.assertEqual(len(h.connections), 1)
         self.assertEqual(h.connections[0].commands().count("TODAY"), 2)
 
@@ -346,6 +359,7 @@ class ServiceBehaviourTests(unittest.TestCase):
         h.run()
         self.assertEqual(len(h.connections), 2)
         self.assertEqual(h.connections[1].commands()[:4], ["TIME", "AREA", "TODAY", "TOMORROW"])
+        self.assertEqual(h.connections[1].sent_at[:4], [70, 70, 75, 76])
 
     def test_07_reconnect_resends_cached_forecast_without_contacting_jma(self):
         h = Harness(until=100)
@@ -356,13 +370,18 @@ class ServiceBehaviourTests(unittest.TestCase):
         self.assertEqual(h.connections[1].lines[1:4], ["AREA,Example Station\r\n", h.TODAY, h.TOMORROW])
 
     def test_09_forecast_survives_reconnect_even_if_jma_is_down(self):
-        h = Harness(until=1900)
-        h.clock.at(1790, h.unplug)
-        h.clock.at(1799, lambda: setattr(h, "fetch_error", URLError("offline")))
-        h.clock.at(1850, h.plug)
+        h = Harness(until=3070)
+        h.clock.at(3030, h.unplug)
+        h.clock.at(3040, lambda: setattr(h, "fetch_error", URLError("offline")))
+        h.clock.at(3045, h.plug)
         h.run()
         self.assertEqual(len(h.connections), 2)
-        self.assertEqual(h.connections[1].lines[1:4], ["AREA,Example Station\r\n", h.TODAY, h.TOMORROW])
+        self.assertEqual(h.fetch_times, [5, 3051])
+        self.assertIn(h.TODAY, h.connections[1].lines)
+        self.assertIn(h.TOMORROW, h.connections[1].lines)
+        connection = h.connections[1]
+        self.assertEqual([connection.sent_at[connection.lines.index(line)] for line in (h.TODAY, h.TOMORROW)],
+                         [3051, 3052])
 
     def test_area_lookup_failure_does_not_block_forecasts_and_retries(self):
         h = Harness(until=62)
@@ -372,6 +391,46 @@ class ServiceBehaviourTests(unittest.TestCase):
         self.assertEqual(fetch_label.call_count, 2)
         fetch_label.assert_called_with("12345")
         self.assertEqual(h.connections[0].commands(), ["TIME", "TODAY", "TOMORROW", "TIME", "AREA"])
+
+    def test_clock_is_aligned_to_minute_when_started_mid_minute(self):
+        start = datetime(2026, 11, 10, 18, 49, 40, tzinfo=weather_service.JST)
+        h = Harness(until=90, start=start)
+        h.run()
+        connection = h.connections[0]
+        self.assertEqual([t for t, cmd in zip(connection.sent_at, connection.commands()) if cmd == "TIME"],
+                         [0, 20, 80])
+        self.assertEqual(h.fetch_times, [5, 65])
+        self.assertEqual(connection.lines[-1], "AREA,Example Station\r\n")
+
+    def test_retry_avoids_minute_boundary(self):
+        start = datetime(2026, 11, 10, 18, 0, 52, tzinfo=weather_service.JST)
+        h = Harness(until=80, start=start)
+        h.fetch_error = URLError("offline")
+        h.run()
+        self.assertEqual(h.fetch_times, [13, 73])
+
+    def test_next_forecast_time_rolls_over_day_and_year(self):
+        now = datetime(2026, 12, 31, 23, 50, 45, tzinfo=weather_service.JST)
+        self.assertEqual(weather_service.next_forecast_time(now),
+                         datetime(2027, 1, 1, 0, 50, 45, tzinfo=weather_service.JST))
+
+    def test_slow_fetch_waits_for_the_next_clock_update_before_sending(self):
+        start = datetime(2026, 11, 10, 18, 50, tzinfo=weather_service.JST)
+        h = Harness(until=80, start=start)
+        h.service.cached_lines = {"TODAY": h.TODAY, "TOMORROW": h.TOMORROW}
+        h.service.next_forecast_at = start + timedelta(seconds=45)
+
+        def slow_fetch(office):
+            result = h.fetch(office)
+            h.clock.sleep(20)
+            return result
+
+        h.service.fetch = slow_fetch
+        h.run()
+        connection = h.connections[0]
+        self.assertEqual(h.fetch_times, [45])
+        self.assertEqual(connection.sent_at[-4:], [66, 66, 71, 72])
+        self.assertEqual(connection.commands()[-4:], ["TIME", "AREA", "TODAY", "TOMORROW"])
 
 
 class CdcLineFormatTests(unittest.TestCase):

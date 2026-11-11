@@ -34,9 +34,9 @@ PICO_PID = 0xFEDE
 WEATHER_TYPES = ("晴れ", "曇り", "雨", "雪")
 CONNECTORS = ("", "時々", "のち")
 
-TIME_INTERVAL_S = 60
-FORECAST_INTERVAL_S = 1800
 FORECAST_RETRY_S = 60
+FORECAST_START_DELAY_S = 5
+FORECAST_GUARD_S = 5
 RECONNECT_INTERVAL_S = 2
 AREA_LABEL_MAX_LENGTH = 22
 
@@ -331,6 +331,13 @@ def install_stop_handlers() -> None:
             signal.signal(number, _raise_stop)
 
 
+def next_forecast_time(now: datetime) -> datetime:
+    target = now.replace(minute=50, second=45, microsecond=0)
+    if target <= now:
+        target += timedelta(hours=1)
+    return target
+
+
 class WeatherService:
     """Keeps the latest forecast and resends it whenever the Pico reconnects."""
 
@@ -357,7 +364,8 @@ class WeatherService:
         self.sleep = sleep
         self.clock = clock
         self.cached_lines: dict[str, str] = {}
-        self.next_fetch = 0.0
+        self.next_fetch = self.monotonic() + FORECAST_START_DELAY_S
+        self.next_forecast_at: datetime | None = None
         self.area_label: str | None = None
         self.next_area_fetch = 0.0
 
@@ -373,27 +381,26 @@ class WeatherService:
             self.next_fetch = self.monotonic() + FORECAST_RETRY_S
             return False
         self.cached_lines.update(lines)
-        self.next_fetch = self.monotonic() + FORECAST_INTERVAL_S
+        self.next_fetch = 0.0
+        self.next_forecast_at = next_forecast_time(self.clock())
         return bool(lines)
-
-    def send_cached_forecasts(self, connection: Any) -> None:
-        for command in ("TODAY", "TOMORROW"):
-            if command in self.cached_lines:
-                send(connection, self.cached_lines[command])
 
     def session(self, port_name: str) -> None:
         connection = self.open_port(port_name)
         try:
             logger.info("Connected to Pico CDC on %s.", port_name)
-            next_time = 0.0
-            announced = False
+            last_time: datetime | None = None
+            last_time_sent = self.monotonic()
+            pending_forecasts = [key for key in ("TODAY", "TOMORROW") if key in self.cached_lines]
             while True:
                 now = self.clock()
                 monotonic_now = self.monotonic()
-                time_due = monotonic_now >= next_time
+                minute = now.replace(second=0, microsecond=0)
+                time_due = minute != last_time
                 if time_due:
                     send(connection, time_line(now))
-                    next_time = monotonic_now + TIME_INTERVAL_S
+                    last_time = minute
+                    last_time_sent = self.monotonic()
                 new_area_label = False
                 if self.area_label is None and monotonic_now >= self.next_area_fetch:
                     try:
@@ -404,12 +411,18 @@ class WeatherService:
                         self.next_area_fetch = self.monotonic() + FORECAST_RETRY_S
                 if self.area_label is not None and (time_due or new_area_label):
                     send(connection, f"AREA,{self.area_label}\r\n")
-                updated = monotonic_now >= self.next_fetch and self.refresh_forecast(now)
-                # A new connection always receives the last known forecast without waiting for JMA.
-                if updated or not announced:
-                    self.send_cached_forecasts(connection)
-                announced = True
-                # Writes only happen every TIME_INTERVAL_S, so probe the port each second to notice unplugging quickly.
+                away_from_minute = FORECAST_GUARD_S <= now.second < 60 - FORECAST_GUARD_S
+                fetch_due = (self.next_forecast_at is None or now >= self.next_forecast_at)
+                if (away_from_minute and monotonic_now - last_time_sent >= FORECAST_GUARD_S
+                        and monotonic_now >= self.next_fetch and fetch_due):
+                    if self.refresh_forecast(now):
+                        pending_forecasts = [key for key in ("TODAY", "TOMORROW") if key in self.cached_lines]
+                now = self.clock()
+                if (pending_forecasts and now.replace(second=0, microsecond=0) == last_time
+                        and FORECAST_GUARD_S <= now.second < 60 - FORECAST_GUARD_S
+                        and self.monotonic() - last_time_sent >= FORECAST_GUARD_S):
+                    send(connection, self.cached_lines[pending_forecasts.pop(0)])
+                # Probe the port each second to notice unplugging quickly.
                 probe_connection(connection)
                 self.sleep(1)
         finally:
