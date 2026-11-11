@@ -85,7 +85,7 @@ USB mute and unmute apply an approximately 5 ms linear gain ramp to incoming PCM
 
 ### Complete System
 
-Except for the Weather screen, these are reference photos of the parent project. The displayed version and button instructions differ from Weather v1.0.
+These photos show this project running on the hardware. The Weather-screen photo predates the addition of the location name.
 
 > **Important assembly note (orientation and placement)**
 >
