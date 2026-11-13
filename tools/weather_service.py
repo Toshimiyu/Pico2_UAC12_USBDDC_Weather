@@ -408,6 +408,7 @@ class WeatherService:
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], datetime] = lambda: datetime.now(JST),
+        wx_timestamps: bool = False,
     ) -> None:
         self.requested_port = requested_port
         self.area = area
@@ -418,6 +419,7 @@ class WeatherService:
         self.monotonic = monotonic
         self.sleep = sleep
         self.clock = clock
+        self.wx_timestamps = wx_timestamps
         self.cached_lines: dict[str, str] = {}
         self.next_fetch = self.monotonic() + FORECAST_START_DELAY_S
         self.next_forecast_at: datetime | None = None
@@ -454,6 +456,8 @@ class WeatherService:
                 time_due = minute != last_time
                 if time_due:
                     send(connection, time_line(now))
+                    if self.wx_timestamps:
+                        send(connection, f"WXTIME,{int(self.clock().timestamp() * 1000)}\r\n")
                     last_time = minute
                     last_time_sent = self.monotonic()
                 new_area_label = False
@@ -510,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", help="Serial port name, for example COM5. Auto-detected by default.")
     parser.add_argument("--log-file", help="Write a rotating log file (useful when run with pythonw.exe).")
     parser.add_argument("--setup", action="store_true", help="Open the forecast area selection window.")
+    parser.add_argument("--wx-timestamps", action="store_true",
+                        help="Send clock synchronization for WX measurement logs.")
     args = parser.parse_args(argv)
     configure_logging(args.log_file)
     install_stop_handlers()
@@ -521,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
                 from weather_setup import setup_area
             setup_area(config_path())
         else:
-            WeatherService(args.port, load_area(config_path())).run_forever()
+            WeatherService(args.port, load_area(config_path()), wx_timestamps=args.wx_timestamps).run_forever()
     except KeyboardInterrupt:
         logger.info("Weather service stopped.")
     except RuntimeError as error:

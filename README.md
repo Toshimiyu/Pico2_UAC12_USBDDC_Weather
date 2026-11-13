@@ -141,7 +141,7 @@ CDCインターフェースはCMakeの`USB_BRINGUP_LEVEL=3`で有効になり、
 
 起動レベルは`0`（USB無効）、`1`（TinyUSB初期化のみ・CDCなし）、`2`（通常動作・CDCなし）、`3`（通常動作・CDCあり）です。天気ガジェットを利用する既定値は`3`です。CDCを無効にする場合は`-DUSB_BRINGUP_LEVEL=2`を指定してください。
 
-DIAG MODEでPCから本機の仮想COMポートを開くと、CDC接続からの経過時間をミリ秒で記録したCSVログを出力します。最初のメタデータ行にはファームウェア版、プリフィル値、UACモードを記録します。通常行は100ms間隔で、`MS,FREQ,BIT_DEPTH,USB_MODE,HOST_RATE,FEEDBACK_RATE,HF_DIFF_NOW,RING_NOW,RING_MIN,RING_MAX,MAX_HF_DIFF_SESSION,MAX_HF_DIFF_STREAM,STATE`の順です。`USB_MODE`はビルド構成に応じた`UAC1`または`UAC2`です。`HOST_RATE`は受信フレーム数から求める250ms窓の推定値です。`HF_DIFF_NOW`は両レートが有効な場合の符号付き`HOST_RATE - FEEDBACK_RATE`で、どちらかが0（未計測または無効）の場合は空欄です。`MAX_HF_DIFF_SESSION`はCDCログセッション中の最大絶対差、`MAX_HF_DIFF_STREAM`は現在のSTREAMING期間中の最大絶対差です。`RING_MIN`/`RING_MAX`は各ログ間隔で観測したリング水位です。状態遷移は`STATE,MS,FROM,TO,RATE,RING,DMA_POOL,USB_MODE`、異常は`ANOMALY,MS,CODE,DETAIL,USB_MODE,STATE,RATE,RING,DMA_POOL`形式で記録し、遷移・異常時の状態と水位も残します。状態遷移イベントは状態を更新したCore0で記録するため、周期サンプルより高い時間分解能で遷移時刻を比較できます。ログに日時が必要な場合はPC側で付加してください。
+DIAG MODEでPCから本機の仮想COMポートを開くと、CDC接続からの経過時間をミリ秒で記録したCSVログを出力します。最初のメタデータ行にはファームウェア版、プリフィル値、UACモードを記録します。通常行は100ms間隔で、`MS,FREQ,BIT_DEPTH,USB_MODE,HOST_RATE,FEEDBACK_RATE,HF_DIFF_NOW,RING_NOW,RING_MIN,RING_MAX,MAX_HF_DIFF_SESSION,MAX_HF_DIFF_STREAM,STATE`の順です。`USB_MODE`はビルド構成に応じた`UAC1`または`UAC2`です。`HOST_RATE`は受信フレーム数から求める250ms窓の推定値です。`HF_DIFF_NOW`は両レートが有効な場合の符号付き`HOST_RATE - FEEDBACK_RATE`で、どちらかが0（未計測または無効）の場合は空欄です。`MAX_HF_DIFF_SESSION`はCDCログセッション中の最大絶対差、`MAX_HF_DIFF_STREAM`は現在のSTREAMING期間中の最大絶対差です。ただし、STREAMING開始後1秒間はホストレート推定の過渡値を除外します。`RING_MIN`/`RING_MAX`は各ログ間隔で観測したリング水位です。状態遷移は`STATE,MS,FROM,TO,RATE,RING,DMA_POOL,USB_MODE`、異常は`ANOMALY,MS,CODE,DETAIL,USB_MODE,STATE,RATE,RING,DMA_POOL`形式で記録し、遷移・異常時の状態と水位も残します。状態遷移イベントは状態を更新したCore0で記録するため、周期サンプルより高い時間分解能で遷移時刻を比較できます。ログに日時が必要な場合はPC側で付加してください。
 
 天気サービスはWeather Service用COMポートを使用し、診断ログ確認にはUSB Diagnostics用COMポートを使います。別々のポートなので、サービスを起動したままターミナルでCDCログを確認できます。
 
@@ -417,6 +417,18 @@ U = 0
 Onkyo HF Playerは仕様上UAC1モードのみ対応しています。派生元では、UAC1モードで上記Android端末との動作を確認しています。
 
 Onkyo HF Playerの独自ドライバーを使用せず、Android標準ドライバー（Foobar2000など）で使用する場合は、UAC1・UAC2の両モードで正常に動作することをSony XQ-ES44で確認しています。ただし、Onkyo HF Playerの独自ドライバーを使用した直後にAndroid標準ドライバーへ切り替える場合は、Androidに正しく認識させるため、USBコネクターを一度抜き差しして再接続してください。
+
+### Androidでのプツ音の検証
+
+2026年11月13日、Sony XQ-ES44（Android 16、標準オーディオドライバー）をUAC2で使用し、48kHz / 32bitで再生した際の観察結果です。Windows 11 26H2でも48kHz / 32bitで比較しました。
+
+- AndroidのYouTubeとMusicアプリでは、不定期に短いプツ音が発生しました。水位が約50%で安定した後にも発生し、Androidの音量を変更してもプツ音の大きさは変わりませんでした。
+- Androidで無音WAVを再生した際には、プツ音は確認されませんでした。無音再生時のUSB形式は未確認です。
+- `FB_BASE_LIMIT_PPM=50`、`FB_BOOST_MAX_PPM=500`の試験設定では、Windowsで水位が約3分40秒後に49.9%となり、音切れは確認されませんでした。Android版Foobar2000では水位が約2分27秒後に50%となり、プツ音は確認されませんでした。同設定のMusicアプリではプツ音が残りました。
+- MusicアプリでDSEE UltimateをOFFにすると、プツ音の頻度はかなり下がりましたが、不定期のプツ音と一瞬音が濁るような現象は残りました。
+- 診断画面ではO/F/S/C/Uが0で、異常イベントは確認されませんでした。これは全ての音声異常がないことを保証するものではありません。
+
+フィードバック制限値を小さくすると改善する傾向がありましたが、原因は未特定です。アプリや音響効果、フィードバック制御との関係を引き続き確認する必要があります。Foobar2000の使用やDSEE Ultimateの無効化は回避策の候補です。上記のフィードバック値は試験条件であり、長時間の安定性は未確認です。補正幅を小さくしすぎると水位が漂い、音切れする可能性があります。
 
 ## USB Audio Classの選択
 

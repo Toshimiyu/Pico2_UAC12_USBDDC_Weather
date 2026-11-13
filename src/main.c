@@ -26,6 +26,9 @@
 #include "spectrum.h"
 #include "debug_gauge.h"
 #include "weather_rx.h"
+#if LOOP_MEASUREMENT
+#include "loop_measurement.h"
+#endif
 
 #define IDLE_CLEANUP_TIMEOUT_US (500000u)
 
@@ -344,5 +347,9 @@ int main(void)
 
 	    // Only the active page is drawn; diagnostics no longer overlays the playback screen.
 	    display_service();
+#if LOOP_MEASUREMENT
+	    loop_measurement_task();
+	    display_rta_loop_render_service();
+#endif
 	}
 }

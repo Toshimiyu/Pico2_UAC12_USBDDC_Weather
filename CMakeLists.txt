@@ -61,6 +61,11 @@ if(NOT USB_BRINGUP_LEVEL MATCHES "^[0-3]$")
     message(FATAL_ERROR "USB_BRINGUP_LEVEL must be 0, 1, 2, or 3")
 endif()
 
+option(LOOP_MEASUREMENT "Enable CDC loop interval measurement in GADGET MODE" OFF)
+if(LOOP_MEASUREMENT AND NOT USB_BRINGUP_LEVEL STREQUAL "3")
+    message(FATAL_ERROR "LOOP_MEASUREMENT requires USB_BRINGUP_LEVEL=3")
+endif()
+
 # --- Generate the current build date and time as a string ---
 # Use the YYYY/MM/DD HH:MM format.
 string(TIMESTAMP BUILD_TIMESTAMP "%Y/%m/%d %H:%M")

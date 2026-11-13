@@ -7,6 +7,9 @@
 #include "pico/stdlib.h"
 #include "tusb.h"
 #include "usb_audio_config.h"
+#if LOOP_MEASUREMENT
+#include "loop_measurement.h"
+#endif
 
 #define WEATHER_LINE_CAPACITY 128u
 #define WEATHER_USB_TIMEOUT_US (300000000u)
@@ -279,6 +282,28 @@ static void receive_byte(uint8_t byte)
 		if (!discard_until_newline && input_line_length != 0)
 		{
 			input_line[input_line_length] = '\0';
+#if LOOP_MEASUREMENT
+			if (strncmp(input_line, "WXTIME,", 7) == 0)
+			{
+				const char *digits = input_line + 7;
+				uint64_t unix_ms = 0u;
+				bool valid = *digits != '\0';
+				for (; valid && *digits != '\0'; ++digits)
+				{
+					if (*digits < '0' || *digits > '9' || unix_ms > 4102444799999ull / 10u)
+						valid = false;
+					else
+						unix_ms = unix_ms * 10u + (uint64_t)(*digits - '0');
+				}
+				if (valid && unix_ms >= 946684800000ull && unix_ms <= 4102444799999ull)
+					loop_measurement_weather_set_time(unix_ms);
+			}
+			else if (strcmp(input_line, "WXLOG") == 0)
+				loop_measurement_weather_dump();
+			else if (strcmp(input_line, "WXCLR") == 0)
+				loop_measurement_weather_clear();
+			else
+#endif
 			(void)parse_weather_line(input_line);
 		}
 		input_line_length = 0;
@@ -362,6 +387,10 @@ void weather_rx_task(void)
 			break;
 		const uint32_t count = available < sizeof(bytes) ? available : sizeof(bytes);
 		const uint32_t received = tud_cdc_n_read(0, bytes, count);
+#if LOOP_MEASUREMENT
+		if (received != 0)
+			loop_measurement_weather_received(received);
+#endif
 		for (uint32_t index = 0; index < received; ++index)
 			receive_byte(bytes[index]);
 	}

@@ -51,7 +51,7 @@ typedef struct
 	// level_min / level_max are collected by Core1 at every Ring fetch (min: right after, max: right before)
 	// since STREAMING started, so they include the sawtooth that Core0 loop sampling would miss.
 	volatile int32_t ring_pool_now;		   // Ring level + frames queued in the DMA pool [frames] (upper bound)
-	volatile int32_t max_hf_diff;		   // max |host rate H - feedback rate F| [Hz] since STREAMING started
+	volatile int32_t max_hf_diff;		   // max |host rate H - feedback rate F| [Hz], excluding the first STREAMING second
 	volatile uint32_t output_stop_count;   // underruns: Core1 output stopped because Ring and pool ran dry while STREAMING
 	volatile uint32_t switch_count;		   // completed sample-rate changes
 	volatile uint32_t switch_timeout_count; // switches whose drain hit SWITCH_DRAIN_TIMEOUT_US and was forced

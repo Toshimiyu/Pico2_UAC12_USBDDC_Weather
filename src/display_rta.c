@@ -258,6 +258,12 @@ static volatile bool display_dirty = false;
 static bool render_pending = false;
 static uint32_t rta_next_frame_us;
 static bool rta_frame_rate_started;
+#if LOOP_MEASUREMENT
+#define LOOP_DISPLAY_CHARS 23u
+static char loop_display_text[LOOP_DISPLAY_CHARS + 1] = "a---- b----            ";
+static char loop_display_drawn[LOOP_DISPLAY_CHARS];
+static uint32_t loop_display_next_us;
+#endif
 static uint8_t render_step = 0;
 #define FORMAT_TEXT_CHARS 18
 static char format_render_text[FORMAT_TEXT_CHARS + 1];
@@ -1529,6 +1535,10 @@ void display_rta_set_page(display_page_t page)
 
     atomic_store_explicit(&spectrum_active, false, memory_order_release);
     current_page = page;
+#if LOOP_MEASUREMENT
+    memset(loop_display_drawn, ' ', sizeof(loop_display_drawn));
+    loop_display_next_us = time_us_32();
+#endif
     rta_frame_rate_started = false;
     weather_drawn_valid = false;
     weather_ops_pending = false;
@@ -1592,6 +1602,46 @@ static bool display_weather_has_slack(void)
         (uint32_t)(now - audio_last_data_us) < 200000u;
     return !audio_active || display_audio_has_slack();
 }
+
+#if LOOP_MEASUREMENT
+void display_rta_set_loop_measurement(bool valid, uint32_t core0_us, uint32_t core1_us)
+{
+    char text[LOOP_DISPLAY_CHARS + 1];
+    int length;
+    if (valid)
+        length = snprintf(text, sizeof(text), "a%lu b%lu",
+            (unsigned long)core0_us, (unsigned long)core1_us);
+    else
+        length = snprintf(text, sizeof(text), "a---- b----");
+    if (length < 0 || (size_t)length >= sizeof(text))
+        panic("Loop display text overflow");
+    memset(text + length, ' ', LOOP_DISPLAY_CHARS - (size_t)length);
+    text[LOOP_DISPLAY_CHARS] = '\0';
+    memcpy(loop_display_text, text, sizeof(text));
+}
+
+void display_rta_loop_render_service(void)
+{
+    if (!page_ready ||
+        (current_page != DISPLAY_PAGE_WEATHER && current_page != DISPLAY_PAGE_PLAYBACK))
+        return;
+    const uint32_t now = time_us_32();
+    if ((int32_t)(now - loop_display_next_us) < 0 || !display_audio_has_slack())
+        return;
+    const uint16_t x = current_page == DISPLAY_PAGE_WEATHER ? 68u : 120u;
+    const uint16_t y = current_page == DISPLAY_PAGE_WEATHER ? 169u : 226u;
+    for (uint8_t i = 0; i < LOOP_DISPLAY_CHARS; ++i)
+    {
+        if (loop_display_text[i] != loop_display_drawn[i])
+        {
+            lcd_draw_char(x + 8u * i, y, loop_display_text[i], COLOR_PEAK_DOT, COLOR_BG, 1);
+            loop_display_drawn[i] = loop_display_text[i];
+            loop_display_next_us = now + 2000u;
+            return;
+        }
+    }
+}
+#endif
 
 bool display_rta_page_service(void)
 {

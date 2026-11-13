@@ -27,6 +27,9 @@
 #include "common_types.h"
 #include "common.h"
 #include "mute_ramp.h"
+#if LOOP_MEASUREMENT
+#include "loop_measurement.h"
+#endif
 #include "ringbuffer.h"
 #include "display_rta.h"
 #include "transmit_to_dac.h"
@@ -60,10 +63,11 @@ volatile bool audio_data_seen = false;
 #define FB_LIMIT_PPM (3000.0f)	   // hard limit of the correction : +-0.3 % of fs (never exceeds FB_ADJ_LIMIT Hz)
 #define FB_UPDATE_PERIOD_US (1000) // one update per USB frame
 #define HOST_RATE_UPDATE_US (250000u)
-#define FB_BASE_LIMIT_PPM  (300.0f)
+#define HF_DIFF_SETTLE_TIME_US (1000000u)
+#define FB_BASE_LIMIT_PPM  (50.0f)
 #define FB_BOOST_START_ERR (128.0f)
 #define FB_BOOST_FULL_ERR  (512.0f)
-#define FB_BOOST_MAX_PPM   (1500.0f)
+#define FB_BOOST_MAX_PPM   (500.0f)
 #define EVT_LOG_N 64
 #define AUDIO_HISTORY_N 64
 #define AUDIO_HISTORY_PRETRIGGER_N 48
@@ -317,6 +321,7 @@ static uint32_t rx_frames_counter = 0;
 static uint32_t host_win_t0_us = 0;
 static uint32_t host_win_frames0 = 0;
 static uint32_t host_rate_hz = 0;
+static uint32_t streaming_started_us = 0;
 
 // ---- Packet statistics ---------------------------------------------
 
@@ -426,11 +431,17 @@ static void set_state(usb_audio_state_t s)
     const usb_audio_state_t previous_state = stats.state;
     stats.state = s;
 
+    if (previous_state != s && s == USB_AUDIO_STREAMING)
+        streaming_started_us = time_us_32();
+
     dma_diag.armed = diagnostics_enabled &&
                      (s == USB_AUDIO_STREAMING);
 
     if (previous_state != s)
     {
+#if LOOP_MEASUREMENT
+        loop_measurement_invalidate();
+#endif
         usb_audio_record_event(
             'S',
             (uint8_t)previous_state,
@@ -1385,8 +1396,9 @@ static void service_host_rate(void)
         pkt_win_bytes0 = bytes;
     }
 
-    // MAX HF: largest |H - F| seen since diagnostics were enabled.
+    // MAX HF: largest |H - F| after the first second of STREAMING.
     if (diagnostics_enabled && stats.state == USB_AUDIO_STREAMING &&
+        (uint32_t)(now - streaming_started_us) >= HF_DIFF_SETTLE_TIME_US &&
         host_rate_hz != 0u && stats.feedback_hz > 0.0f)
     {
         int32_t d = (int32_t)host_rate_hz - (int32_t)(stats.feedback_hz + 0.5f);
@@ -1430,6 +1442,9 @@ void usb_audio_task(void)
     // Loop-interval diagnostics: gap between two calls = everything else Core0 does in main()
     // (SPI drawing, ...) plus the work inside this function
     const uint32_t loop_now_us = time_us_32();
+#if LOOP_MEASUREMENT
+    loop_measurement_sample_core0(loop_now_us);
+#endif
     static uint32_t anomaly_loop_prev_us;
     if (stats.state == USB_AUDIO_STREAMING && anomaly_loop_prev_us != 0)
     {

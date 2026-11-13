@@ -151,7 +151,7 @@ The CMake option `USB_BRINGUP_LEVEL=3` enables two CDC interfaces, which appear 
 
 USB startup levels are `0` (USB off), `1` (TinyUSB initialization only, no CDC), `2` (full operation, no CDC), and `3` (full operation with CDC). The default is `3` for the weather gadget. To disable CDC, specify `-DUSB_BRINGUP_LEVEL=2`.
 
-In DIAG MODE, a PC connected to the USB Diagnostics COM port receives CSV logs with milliseconds elapsed since the CDC connection. Metadata includes firmware version, prefill values, and UAC mode. Regular samples are emitted every 100 ms as `MS,FREQ,BIT_DEPTH,USB_MODE,HOST_RATE,FEEDBACK_RATE,HF_DIFF_NOW,RING_NOW,RING_MIN,RING_MAX,MAX_HF_DIFF_SESSION,MAX_HF_DIFF_STREAM,STATE`. `USB_MODE` is `UAC1` or `UAC2` according to the build. `HOST_RATE` is estimated from received frames over a 250 ms window; `HF_DIFF_NOW` is the signed `HOST_RATE - FEEDBACK_RATE` when both rates are nonzero and is otherwise empty. `MAX_HF_DIFF_SESSION` is the maximum absolute difference in the CDC session, and `MAX_HF_DIFF_STREAM` is the maximum for the current STREAMING period. `RING_MIN`/`RING_MAX` are the observed ring levels within the log interval. State transitions use `STATE,MS,FROM,TO,RATE,RING,DMA_POOL,USB_MODE`, and anomalies use `ANOMALY,MS,CODE,DETAIL,USB_MODE,STATE,RATE,RING,DMA_POOL`, preserving the state and levels at the event. State transitions are recorded on Core0 when the state changes, allowing timestamps to be compared at finer resolution than periodic samples. Add a wall-clock timestamp on the PC if needed.
+In DIAG MODE, a PC connected to the USB Diagnostics COM port receives CSV logs with milliseconds elapsed since the CDC connection. Metadata includes firmware version, prefill values, and UAC mode. Regular samples are emitted every 100 ms as `MS,FREQ,BIT_DEPTH,USB_MODE,HOST_RATE,FEEDBACK_RATE,HF_DIFF_NOW,RING_NOW,RING_MIN,RING_MAX,MAX_HF_DIFF_SESSION,MAX_HF_DIFF_STREAM,STATE`. `USB_MODE` is `UAC1` or `UAC2` according to the build. `HOST_RATE` is estimated from received frames over a 250 ms window; `HF_DIFF_NOW` is the signed `HOST_RATE - FEEDBACK_RATE` when both rates are nonzero and is otherwise empty. `MAX_HF_DIFF_SESSION` is the maximum absolute difference in the CDC session, and `MAX_HF_DIFF_STREAM` is the maximum for the current STREAMING period; host-rate estimates are excluded for the first second after STREAMING starts. `RING_MIN`/`RING_MAX` are the observed ring levels within the log interval. State transitions use `STATE,MS,FROM,TO,RATE,RING,DMA_POOL,USB_MODE`, and anomalies use `ANOMALY,MS,CODE,DETAIL,USB_MODE,STATE,RATE,RING,DMA_POOL`, preserving the state and levels at the event. State transitions are recorded on Core0 when the state changes, allowing timestamps to be compared at finer resolution than periodic samples. Add a wall-clock timestamp on the PC if needed.
 
 The weather service uses the Weather Service COM port, while a terminal can open the separate USB Diagnostics COM port. Both can stay connected at the same time; there is no need to stop the service to view CDC logs.
 
@@ -467,6 +467,18 @@ The following audio playback verification details are inherited from the parent 
 Onkyo HF Player supports UAC1 mode only. The parent project was verified with HF Player in UAC1 mode on the Android device listed above.
 
 When not using Onkyo HF Player's proprietary driver and using the Android standard driver (e.g. with Foobar2000), normal operation has been verified in both UAC1 and UAC2 modes on the Sony XQ-ES44. However, after using Onkyo HF Player's proprietary driver, disconnect and reconnect the USB connector once before switching to the Android standard driver so that Android can recognize the device correctly.
+
+### Android Click Investigation
+
+On November 13, 2026, playback was observed on a Sony XQ-ES44 running Android 16 with the standard audio driver, using UAC2 at 48 kHz / 32-bit. Windows 11 26H2 was also tested at 48 kHz / 32-bit.
+
+- YouTube and the Music app on Android produced intermittent short clicks, including after the ring level settled around 50%. Changing the Android volume did not change the click volume.
+- No clicks were observed while playing a silent WAV on Android. The USB format during silent playback was not confirmed.
+- With the test settings `FB_BASE_LIMIT_PPM=50` and `FB_BOOST_MAX_PPM=500`, the Windows ring level reached 49.9% after about 3 minutes 40 seconds without observed dropouts. Android Foobar2000 reached 50% after about 2 minutes 27 seconds without observed clicks. Clicks remained with the Music app under the same settings.
+- Turning DSEE Ultimate off in the Music app greatly reduced click frequency, but intermittent clicks and brief muddy-sounding audio remained.
+- The diagnostic screen showed O/F/S/C/U at zero and no anomaly events. This does not rule out every kind of audio problem.
+
+Reducing the feedback limits tended to improve the symptoms, but the cause remains unconfirmed. The roles of the app, audio effects, and feedback control need further investigation. Foobar2000 and disabling DSEE Ultimate are possible workarounds. The feedback values above are test conditions, not long-term stability guarantees; overly narrow correction limits can allow the ring level to drift and cause dropouts.
 
 ---
 

@@ -345,6 +345,19 @@ class Harness:
 
 
 class ServiceBehaviourTests(unittest.TestCase):
+    def test_wx_timestamp_sync_is_opt_in(self):
+        h = Harness(until=61)
+        h.service.wx_timestamps = True
+        h.run()
+        connection = h.connections[0]
+        sync = [(when, line) for when, line in zip(connection.sent_at, connection.lines)
+                if line.startswith("WXTIME,")]
+        self.assertEqual(sync, [
+            (0, f"WXTIME,{int(h.start.timestamp() * 1000)}\r\n"),
+            (60, f"WXTIME,{int((h.start + timedelta(seconds=60)).timestamp() * 1000)}\r\n"),
+        ])
+        self.assertEqual(connection.commands()[:3], ["TIME", "WXTIME", "AREA"])
+
     def test_01_startup_sends_time_today_tomorrow_in_order(self):
         h = Harness(until=7)
         h.run()

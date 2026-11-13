@@ -14,6 +14,9 @@
 #include "hardware/regs/dma.h"
 #include "hardware/regs/pio.h"
 #include "i2s_pio_interface.h"
+#if LOOP_MEASUREMENT
+#include "loop_measurement.h"
+#endif
 
 static const PIO pio = pio0;
 static const uint sm = 0;
@@ -335,6 +338,9 @@ void __not_in_flash_func(dma_tx_start)(void)
 {
     // Loop-interval diagnostics: gap between two calls (this loop also runs the FFT)
     const uint32_t loop_now_us = time_us_32();
+#if LOOP_MEASUREMENT
+    loop_measurement_sample_core1(loop_now_us);
+#endif
     static uint32_t anomaly_loop_prev_us;
     if (usb_audio_get_state() == USB_AUDIO_STREAMING && anomaly_loop_prev_us != 0)
     {

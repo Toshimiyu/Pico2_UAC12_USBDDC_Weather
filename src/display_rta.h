@@ -57,6 +57,10 @@ void display_rta_update(void);
 bool display_rta_process_fft_left(void);
 void display_rta_process_fft_right(void);
 void display_rta_render_service(void);
+#if LOOP_MEASUREMENT
+void display_rta_set_loop_measurement(bool valid, uint32_t core0_us, uint32_t core1_us);
+void display_rta_loop_render_service(void);
+#endif
 void display_rta_set_format(uint8_t bit_depth, float sample_rate_khz);
 
 // Boot screen (10-second Quad Heritage theme animation).

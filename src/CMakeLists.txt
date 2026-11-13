@@ -58,7 +58,14 @@ add_executable(Pico2_UAC12_USBDDC_Weather
         ${DSP_SRC}
 )
 
+if(LOOP_MEASUREMENT)
+        target_sources(Pico2_UAC12_USBDDC_Weather PRIVATE loop_measurement.c)
+endif()
+
 set(PICO_FIRMWARE_NAME "Pico2_UAC12_USBDDC_Weather_UAC${USB_AUDIO_CLASS_VERSION}")
+if(LOOP_MEASUREMENT)
+        string(APPEND PICO_FIRMWARE_NAME "_LOOP")
+endif()
 set_target_properties(Pico2_UAC12_USBDDC_Weather PROPERTIES OUTPUT_NAME "${PICO_FIRMWARE_NAME}")
 
 # UART console is unused; do not pull pico_stdio_uart/hardware_uart into the image.
@@ -97,6 +104,7 @@ target_compile_definitions(Pico2_UAC12_USBDDC_Weather PRIVATE
         USB_AUDIO_CLASS_VERSION=${USB_AUDIO_CLASS_VERSION}
         USB_AUDIO_PREFILL_FRAMES=${USB_AUDIO_PREFILL_FRAMES}
         FW_VERSION="${PICO_FIRMWARE_VERSION}"
+        LOOP_MEASUREMENT=$<BOOL:${LOOP_MEASUREMENT}>
         )
 
 # Add any user requested libraries
