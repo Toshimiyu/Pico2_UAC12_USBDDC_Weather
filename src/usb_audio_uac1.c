@@ -7,6 +7,7 @@
 #include "common.h"
 
 static const uint32_t uac1_sample_rates[] = {44100, 48000, 88200, 96000};
+static uint16_t uac1_volume_resolution = VOLUME_RESOLUTION;
 
 const uint32_t *usb_audio_class_sample_rates(uint8_t *count)
 {
@@ -128,7 +129,7 @@ static bool feature_unit_get_request(uint8_t rhport, tusb_control_request_t cons
         value = MAX_VOLUME;
         break;
     case AUDIO10_CS_REQ_GET_RES:
-        value = VOLUME_RESOLUTION;
+        value = (int16_t)uac1_volume_resolution;
         break;
     default:
         return false;
@@ -143,7 +144,23 @@ static bool feature_unit_set_request(tusb_control_request_t const *request, cons
     const uint8_t selector = TU_U16_HIGH(request->wValue);
     const uint8_t channel = TU_U16_LOW(request->wValue);
 
-    if (channel != 0 || request->bRequest != AUDIO10_CS_REQ_SET_CUR)
+    if (channel != 0)
+        return false;
+
+    if (selector == AUDIO10_FU_CTRL_VOLUME
+        && request->bRequest == AUDIO10_CS_REQ_SET_RES
+        && request->wLength == 2)
+    {
+        const uint16_t resolution =
+            (uint16_t)buffer[0] | ((uint16_t)buffer[1] << 8);
+        if (resolution == 0u || (resolution & 0x8000u) != 0u)
+            return false;
+
+        uac1_volume_resolution = resolution;
+        return true;
+    }
+
+    if (request->bRequest != AUDIO10_CS_REQ_SET_CUR)
         return false;
 
     if (selector == AUDIO10_FU_CTRL_MUTE && request->wLength == 1)

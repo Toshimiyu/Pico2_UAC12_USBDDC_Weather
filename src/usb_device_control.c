@@ -67,7 +67,7 @@ volatile bool audio_data_seen = false;
 #define FB_BASE_LIMIT_PPM  (50.0f)
 #define FB_BOOST_START_ERR (128.0f)
 #define FB_BOOST_FULL_ERR  (512.0f)
-#define FB_BOOST_MAX_PPM   (500.0f)
+#define FB_BOOST_MAX_PPM   (100.0f)
 #define EVT_LOG_N 64
 #define AUDIO_HISTORY_N 64
 #define AUDIO_HISTORY_PRETRIGGER_N 48
@@ -1125,6 +1125,9 @@ static void service_state(void)
 	{
     	uint32_t prefill_frames =
         	(audio_state.freq * TARGET_PREFILL_MS) / 1000u;
+
+		if (prefill_frames < FB_TARGET_LEVEL)
+			prefill_frames = FB_TARGET_LEVEL;
 
     	if (prefill_frames >= SIZE_AUDIO_RING_FRAMES)
         	prefill_frames = SIZE_AUDIO_RING_FRAMES - 1u;

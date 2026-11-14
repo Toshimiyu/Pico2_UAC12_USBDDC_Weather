@@ -114,7 +114,7 @@
 #define TARGET_PREFILL_MS 6
 
 // Legacy start threshold for draining queued audio in non-buffering states.
-// Normal playback starts only after TARGET_PREFILL_MS has accumulated.
+// Normal playback starts after the greater of TARGET_PREFILL_MS and the feedback target has accumulated.
 #ifndef USB_AUDIO_PREFILL_FRAMES
 #define USB_AUDIO_PREFILL_FRAMES (1536)
 #endif
